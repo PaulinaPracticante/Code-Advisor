@@ -50,8 +50,38 @@ function activate(context) {
     }
   });
   const disposable2 = vscode.commands.registerCommand("codeadvisor.codeReviwer", () => {
+    const tab_size = 4;
+    function countSpaces(indent) {
+      let ancho = 0;
+      for (const char of indent) {
+        ancho += char === "	" ? tab_size : 1;
+      }
+      return ancho;
+    }
+    let indentationPrevious = "";
+    const documentText = vscode.window.activeTextEditor?.document.getText() || "";
+    const lines = documentText.split("\n");
+    lines.forEach((line, i) => {
+      if (line.trim() === "") {
+        return;
+      }
+      const indentMatch = line.match(/^[ \t]*/)?.[0] ?? "";
+      const currentWide = countSpaces(indentMatch);
+      const previousWide = countSpaces(indentationPrevious);
+      if (currentWide > previousWide) {
+        const newPart = indentMatch.slice(indentationPrevious.length);
+        if (newPart.includes(" ")) {
+          vscode.window.showWarningMessage("La linea " + (i + 1) + " debio usar tabulaciones en lugar de espacios para la identacion");
+        }
+      } else {
+        if (indentMatch.includes(" ")) {
+          vscode.window.showWarningMessage("La linea " + (i + 1) + " debio usar tabulaciones en lugar de espacios para la identacion");
+        }
+      }
+      indentationPrevious = indentMatch;
+    });
   });
-  context.subscriptions.push(disposable);
+  context.subscriptions.push(disposable, disposable2);
 }
 function deactivate() {
 }

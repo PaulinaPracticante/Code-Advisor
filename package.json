@@ -14,8 +14,12 @@
   "contributes": {
     "commands": [
       {
-        "command": "codeadvisor.helloWorld",
-        "title": "Hello World"
+        "command": "codeadvisor.gitVerification",
+        "title": "Verificar Repositorio de Git"
+      },
+      {
+        "command": "codeadvisor.codeReviwer",
+        "title": "Revisar Código"
       }
     ]
   },

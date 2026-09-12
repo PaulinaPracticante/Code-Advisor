@@ -25,12 +25,54 @@ export function activate(context: vscode.ExtensionContext) {
 
 	});
 
-
+    // Comando para revisar el codigo del documento 
 	const disposable2 = vscode.commands.registerCommand('codeadvisor.codeReviwer', () => {
-		
-	})
 
-	context.subscriptions.push(disposable);
+		const tab_size =  4; //Se considera que el tamaño de tabulacion es de 4 espacios
+
+		// Funcion para contar el numero de espacios en una cadena de texto, consierando el tabulador 
+		function countSpaces(indent: string): number {
+			let ancho = 0;
+			for (const char of indent) { // Se corre cada caracter de la cadena de texto
+				ancho += (char === '\t') ? tab_size : 1; // Si el caracter es un tabulador se suma el tamaño de tabulacion, si no se suma 1
+			}
+			return ancho;
+		}
+
+		let indentationPrevious = '';
+
+		const documentText = vscode.window.activeTextEditor?.document.getText() || ''; //Se obtiene el texto del documento actual 
+		const lines = documentText.split('\n');// Se divide el texto del documento en lineas 
+
+		// Se recorre cada linea del doumento y se verifica la identacion 
+		lines.forEach((line, i) => {
+			if (line.trim() === '') { // Si la linea esta vacia no se hace nada 
+				return;
+			}
+
+			const indentMatch = line.match(/^[ \t]*/)?.[0] ?? '';  // Se obtiene la identacion de la linea actual 
+			const currentWide = countSpaces(indentMatch); // Se obtiene el ancho de la identacion 
+			const previousWide = countSpaces(indentationPrevious); // Se obtiene el ancho de la identacion de la linea anterior
+
+			// Se verifica si la identacion de la linea actual es mayor a la anterior
+			if (currentWide > previousWide) {
+				const newPart = indentMatch.slice(indentationPrevious.length); 
+
+				// Se verifica si la identacion de la linea actual tiene espacios 
+				if (newPart.includes(' ')) {
+					vscode.window.showWarningMessage('La linea ' + (i + 1) + ' debio usar tabulaciones en lugar de espacios para la identacion'); 
+				} 
+			} else {
+				if (indentMatch.includes(' ')){
+					vscode.window.showWarningMessage('La linea ' + (i + 1) + ' debio usar tabulaciones en lugar de espacios para la identacion');
+				}
+			}
+
+			indentationPrevious = indentMatch; // Se guarda la identacion actual para comprar con la siguiente linea 
+		});
+	});
+
+	context.subscriptions.push(disposable, disposable2); //Se registran los comandos 
 }
 
 // This method is called when your extension is deactivated
