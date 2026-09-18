@@ -35,6 +35,185 @@ __export(extension_exports, {
 });
 module.exports = __toCommonJS(extension_exports);
 var vscode = __toESM(require("vscode"));
+function matchesCase(name, caseStyle) {
+  switch (caseStyle) {
+    case "PascalCase":
+      return /^[A-Z][a-zA-Z0-9]*$/.test(name) && /[a-z]/.test(name);
+    case "camelCase":
+      return /^[a-z][a-zA-Z0-9]*$/.test(name);
+    case "UPPER_SNAKE_CASE":
+      return /^[A-Z][A-Z0-9_]*$/.test(name);
+  }
+}
+var CONTROL_FLOW_KEYWORDS = /* @__PURE__ */ new Set(["if", "for", "while", "switch", "catch", "do", "try", "finally", "foreach", "using", "lock"]);
+var JS_TS_NAMING_CONFIG = {
+  //Estilo de nombres 
+  classCase: "PascalCase",
+  functionCase: "camelCase",
+  methodCase: "camelCase",
+  variableCase: "camelCase",
+  constantCase: "camelCase",
+  //Busca la palabra class y descarta export, default y abstract, y captura el nombre 
+  classPatterns: [
+    /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)/
+  ],
+  //Busca function y descarta export, default y async, y captura el nombre
+  functionPatterns: [
+    /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s+([A-Za-z_$][A-Za-z0-9_$]*)/
+  ],
+  //Busca un nombre seguido de (argumentos) y luego { o ;
+  methodPatterns: [
+    /^(?:(?:public|private|protected|static|readonly|abstract|override|async)\s+)*(?:get\s+|set\s+)?\*?\s*([A-Za-z_$#][A-Za-z0-9_$]*)\s*\([^()]*\)\s*(?::\s*[^{;]+)?[{;]/
+  ],
+  //Busca el nombre con let o var al inicio de la linea
+  variablePatterns: [
+    /^(?:export\s+)?(?:let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)/
+  ],
+  //Busca el nombre con const al inicio de la linea
+  constantPatterns: [
+    /^(?:export\s+)?const\s+([A-Za-z_$][A-Za-z0-9_$]*)/
+  ],
+  methodNameBlacklist: CONTROL_FLOW_KEYWORDS
+};
+var PHP_NAMING_CONFIG = {
+  //Estilo para los nombres 
+  classCase: "PascalCase",
+  functionCase: "camelCase",
+  methodCase: "camelCase",
+  variableCase: "camelCase",
+  constantCase: "camelCase",
+  //Busca el nombre con posible abstract o final antes 
+  classPatterns: [
+    /^(?:abstract\s+|final\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)/
+  ],
+  functionPatterns: [
+    /^function\s*&?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/
+  ],
+  methodPatterns: [
+    /^(?:(?:public|private|protected|static|abstract|final)\s+)*function\s*&?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(/
+  ],
+  variablePatterns: [
+    // Asignacion simple: $nombre = valor;
+    /^\$([A-Za-z_][A-Za-z0-9_]*)\s*=(?!=)/,
+    // Propiedad de clase, con modificadores y/o tipo opcionales: private ?string $nombre = valor;
+    // El tipo solo puede ser un primitivo conocido o un identificador con mayuscula inicial (nombre de clase),
+    // para no confundir palabras como "return"/"if"/"echo" con un tipo. Debe terminar en ";", "," o "=" y no en
+    // "->" para no capturar usos como $this->nombre o $obj->metodo().
+    /^(?:(?:public|private|protected|static|readonly)\s+)*(?:\??(?:int|float|string|bool|array|object|callable|iterable|mixed|void|never|self|static|parent|[A-Z][A-Za-z0-9_\\]*)\s+)?\$([A-Za-z_][A-Za-z0-9_]*)\s*(?:[;,]|=(?!=))/
+  ],
+  //Busca el nombre ante las dos formas de declarar constantes en php con const o con define
+  constantPatterns: [
+    /^(?:(?:public|private|protected)\s+)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/,
+    /^define\s*\(\s*['"]([A-Za-z_][A-Za-z0-9_]*)['"]/
+  ],
+  // PHP obliga estos nombres exactos para los metodos magicos; no son una eleccion de estilo del desarrollador
+  methodNameExempt: /^__[A-Za-z]/
+};
+var CSHARP_MODIFIERS = "(?:public|private|protected|internal|static|virtual|override|async|abstract|sealed|new|extern)";
+var CSHARP_NAMING_CONFIG = {
+  //Estilo para los nombres
+  classCase: "PascalCase",
+  functionCase: "camelCase",
+  methodCase: "camelCase",
+  variableCase: "camelCase",
+  constantCase: "camelCase",
+  //Buscan el nombre con class antes 
+  classPatterns: [
+    /^(?:(?:public|private|protected|internal|static|abstract|sealed|partial)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)/
+  ],
+  //vacio porque c# no tiene funciones fuera de una clase, todo es metodo 
+  functionPatterns: [],
+  //Exige el menos un modificador de acceso, luego un tipo de retorno, luego el nombre y (parametros)
+  methodPatterns: [
+    new RegExp(`^(?:${CSHARP_MODIFIERS}\\s+)+[\\w<>\\[\\],.?]+\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\([^()]*\\)\\s*(?:\\{|;|=>|$)`)
+  ],
+  //Busca el nombre con un tipo antes
+  variablePatterns: [
+    /^(?:var|int|string|bool|double|float|long|short|byte|char|decimal|object|dynamic|uint|ulong|ushort|sbyte)\s+([A-Za-z_][A-Za-z0-9_]*)\s*[=;]/
+  ],
+  //Buscan el nombre con const y modificadores opcionales antes 
+  constantPatterns: [
+    /^(?:(?:public|private|protected|internal|static|readonly)\s+)*const\s+[\w<>\[\],.?]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/
+  ],
+  methodNameBlacklist: CONTROL_FLOW_KEYWORDS
+};
+var LANGUAGE_NAMING_CONFIGS = {
+  javascript: JS_TS_NAMING_CONFIG,
+  javascriptreact: JS_TS_NAMING_CONFIG,
+  typescript: JS_TS_NAMING_CONFIG,
+  typescriptreact: JS_TS_NAMING_CONFIG,
+  php: PHP_NAMING_CONFIG,
+  csharp: CSHARP_NAMING_CONFIG
+};
+function matchFirstGroup(text, patterns) {
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return match[1];
+    }
+  }
+  return null;
+}
+function extractNamesByCategory(lines, config) {
+  const classNames = [];
+  const functionNames = [];
+  const methodNames = [];
+  const variableNames = [];
+  const constantNames = [];
+  let braceDepth = 0;
+  const classOuterDepths = [];
+  let pendingClassOuterDepth = null;
+  for (const rawLine of lines) {
+    const commentIndex = rawLine.indexOf("//");
+    const line = commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
+    const trimmed = line.trim();
+    while (classOuterDepths.length > 0 && braceDepth <= classOuterDepths[classOuterDepths.length - 1]) {
+      classOuterDepths.pop();
+    }
+    const insideClass = classOuterDepths.length > 0;
+    const classMatch = matchFirstGroup(trimmed, config.classPatterns);
+    if (classMatch) {
+      classNames.push(classMatch);
+    }
+    if (insideClass) {
+      const methodMatch = matchFirstGroup(trimmed, config.methodPatterns);
+      if (methodMatch && !config.methodNameBlacklist?.has(methodMatch) && !config.methodNameExempt?.test(methodMatch)) {
+        methodNames.push(methodMatch);
+      }
+    } else {
+      const functionMatch = matchFirstGroup(trimmed, config.functionPatterns);
+      if (functionMatch) {
+        functionNames.push(functionMatch);
+      }
+    }
+    const variableMatch = matchFirstGroup(trimmed, config.variablePatterns);
+    if (variableMatch) {
+      variableNames.push(variableMatch);
+    }
+    const constantMatch = matchFirstGroup(trimmed, config.constantPatterns);
+    if (constantMatch) {
+      constantNames.push(constantMatch);
+    }
+    if (classMatch) {
+      pendingClassOuterDepth = braceDepth;
+    }
+    const opens = (line.match(/\{/g) ?? []).length;
+    const closes = (line.match(/\}/g) ?? []).length;
+    braceDepth += opens - closes;
+    if (pendingClassOuterDepth !== null && opens > 0) {
+      classOuterDepths.push(pendingClassOuterDepth);
+      pendingClassOuterDepth = null;
+    }
+  }
+  return { classNames, functionNames, methodNames, variableNames, constantNames };
+}
+function reportInvalidNames(names, caseStyle, label) {
+  names.forEach((name) => {
+    if (!matchesCase(name, caseStyle)) {
+      vscode.window.showErrorMessage(label + " " + name + " no usa " + caseStyle);
+    }
+  });
+}
 function activate(context) {
   console.log('Congratulations, your extension "codeadvisor" is now active!');
   const disposable = vscode.commands.registerCommand("codeadvisor.gitVerification", () => {
@@ -80,6 +259,38 @@ function activate(context) {
       }
       indentationPrevious = indentMatch;
     });
+    const activeFileName = vscode.window.activeTextEditor?.document.fileName ?? "";
+    const activeBaseName = activeFileName.split(/[\\/]/).pop() ?? "";
+    const isEnvFile = activeBaseName === ".env" || activeBaseName.startsWith(".env.");
+    const variables = [];
+    if (isEnvFile) {
+      lines.forEach((line) => {
+        const trimmed = line.trim();
+        if (trimmed === "" || trimmed.startsWith("#")) {
+          return;
+        }
+        const variableName = trimmed.split("=")[0].trim();
+        variables.push(variableName);
+      });
+    }
+    variables.forEach((name) => {
+      const isUpperCase = /^[A-Z][A-Z0-9_]*$/.test(name);
+      if (!isUpperCase) {
+        vscode.window.showErrorMessage("La variable " + name + " no usa UPPER_SNAKE_CASE");
+      }
+    });
+    const languageId = vscode.window.activeTextEditor?.document.languageId ?? "";
+    const namingConfig = LANGUAGE_NAMING_CONFIGS[languageId];
+    if (!namingConfig) {
+      vscode.window.showInformationMessage('La verificaci\xF3n de nombres no soporta el lenguaje "' + languageId + '". Lenguajes soportados: JavaScript, TypeScript, PHP y C#.');
+    } else {
+      const { classNames, functionNames, methodNames, variableNames, constantNames } = extractNamesByCategory(lines, namingConfig);
+      reportInvalidNames(classNames, namingConfig.classCase, "La clase");
+      reportInvalidNames(functionNames, namingConfig.functionCase, "La funci\xF3n");
+      reportInvalidNames(methodNames, namingConfig.methodCase, "El m\xE9todo");
+      reportInvalidNames(variableNames, namingConfig.variableCase, "La variable");
+      reportInvalidNames(constantNames, namingConfig.constantCase, "La constante");
+    }
   });
   context.subscriptions.push(disposable, disposable2);
 }
