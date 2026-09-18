@@ -34,7 +34,12 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
+var vscode2 = __toESM(require("vscode"));
+
+// src/codeReviewerCommand.ts
 var vscode = __toESM(require("vscode"));
+
+// src/namingConfig.ts
 function matchesCase(name, caseStyle) {
   switch (caseStyle) {
     case "PascalCase":
@@ -47,13 +52,13 @@ function matchesCase(name, caseStyle) {
 }
 var CONTROL_FLOW_KEYWORDS = /* @__PURE__ */ new Set(["if", "for", "while", "switch", "catch", "do", "try", "finally", "foreach", "using", "lock"]);
 var JS_TS_NAMING_CONFIG = {
-  //Estilo de nombres 
+  //Estilo de nombres
   classCase: "PascalCase",
   functionCase: "camelCase",
   methodCase: "camelCase",
   variableCase: "camelCase",
   constantCase: "camelCase",
-  //Busca la palabra class y descarta export, default y abstract, y captura el nombre 
+  //Busca la palabra class y descarta export, default y abstract, y captura el nombre
   classPatterns: [
     /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)/
   ],
@@ -76,13 +81,13 @@ var JS_TS_NAMING_CONFIG = {
   methodNameBlacklist: CONTROL_FLOW_KEYWORDS
 };
 var PHP_NAMING_CONFIG = {
-  //Estilo para los nombres 
+  //Estilo para los nombres
   classCase: "PascalCase",
   functionCase: "camelCase",
   methodCase: "camelCase",
   variableCase: "camelCase",
   constantCase: "camelCase",
-  //Busca el nombre con posible abstract o final antes 
+  //Busca el nombre con posible abstract o final antes
   classPatterns: [
     /^(?:abstract\s+|final\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)/
   ],
@@ -117,11 +122,11 @@ var CSHARP_NAMING_CONFIG = {
   methodCase: "camelCase",
   variableCase: "camelCase",
   constantCase: "camelCase",
-  //Buscan el nombre con class antes 
+  //Buscan el nombre con class antes
   classPatterns: [
     /^(?:(?:public|private|protected|internal|static|abstract|sealed|partial)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)/
   ],
-  //vacio porque c# no tiene funciones fuera de una clase, todo es metodo 
+  //vacio porque c# no tiene funciones fuera de una clase, todo es metodo
   functionPatterns: [],
   //Exige el menos un modificador de acceso, luego un tipo de retorno, luego el nombre y (parametros)
   methodPatterns: [
@@ -131,7 +136,7 @@ var CSHARP_NAMING_CONFIG = {
   variablePatterns: [
     /^(?:var|int|string|bool|double|float|long|short|byte|char|decimal|object|dynamic|uint|ulong|ushort|sbyte)\s+([A-Za-z_][A-Za-z0-9_]*)\s*[=;]/
   ],
-  //Buscan el nombre con const y modificadores opcionales antes 
+  //Buscan el nombre con const y modificadores opcionales antes
   constantPatterns: [
     /^(?:(?:public|private|protected|internal|static|readonly)\s+)*const\s+[\w<>\[\],.?]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*=/
   ],
@@ -145,6 +150,16 @@ var LANGUAGE_NAMING_CONFIGS = {
   php: PHP_NAMING_CONFIG,
   csharp: CSHARP_NAMING_CONFIG
 };
+var EXTENSION_TO_LANGUAGE_ID = {
+  ts: "typescript",
+  tsx: "typescriptreact",
+  js: "javascript",
+  jsx: "javascriptreact",
+  php: "php",
+  cs: "csharp"
+};
+
+// src/namingAnalyzer.ts
 function matchFirstGroup(text, patterns) {
   for (const pattern of patterns) {
     const match = text.match(pattern);
@@ -207,92 +222,132 @@ function extractNamesByCategory(lines, config) {
   }
   return { classNames, functionNames, methodNames, variableNames, constantNames };
 }
-function reportInvalidNames(names, caseStyle, label) {
+function reportInvalidNames(names, caseStyle, label, fileLabel, findings) {
   names.forEach((name) => {
     if (!matchesCase(name, caseStyle)) {
-      vscode.window.showErrorMessage(label + " " + name + " no usa " + caseStyle);
+      findings.push(fileLabel + " - " + label + " " + name + " no usa " + caseStyle);
     }
   });
 }
-function activate(context) {
-  console.log('Congratulations, your extension "codeadvisor" is now active!');
-  const disposable = vscode.commands.registerCommand("codeadvisor.gitVerification", () => {
+function analyzeNaming(lines, languageId, fileLabel, findings) {
+  const namingConfig = LANGUAGE_NAMING_CONFIGS[languageId];
+  if (!namingConfig) {
+    return;
+  }
+  const { classNames, functionNames, methodNames, variableNames, constantNames } = extractNamesByCategory(lines, namingConfig);
+  reportInvalidNames(classNames, namingConfig.classCase, "La clase", fileLabel, findings);
+  reportInvalidNames(functionNames, namingConfig.functionCase, "La funci\xF3n", fileLabel, findings);
+  reportInvalidNames(methodNames, namingConfig.methodCase, "El m\xE9todo", fileLabel, findings);
+  reportInvalidNames(variableNames, namingConfig.variableCase, "La variable", fileLabel, findings);
+  reportInvalidNames(constantNames, namingConfig.constantCase, "La constante", fileLabel, findings);
+}
+
+// src/indentationAnalyzer.ts
+var TAB_SIZE = 4;
+function countSpaces(indent) {
+  let ancho = 0;
+  for (const char of indent) {
+    ancho += char === "	" ? TAB_SIZE : 1;
+  }
+  return ancho;
+}
+function analyzeIndentation(lines, fileLabel, findings) {
+  let indentationPrevious = "";
+  lines.forEach((line, i) => {
+    if (line.trim() === "") {
+      return;
+    }
+    const indentMatch = line.match(/^[ \t]*/)?.[0] ?? "";
+    const currentWide = countSpaces(indentMatch);
+    const previousWide = countSpaces(indentationPrevious);
+    if (currentWide > previousWide) {
+      const newPart = indentMatch.slice(indentationPrevious.length);
+      if (newPart.includes(" ")) {
+        findings.push(fileLabel + ":" + (i + 1) + " - La linea debio usar tabulaciones en lugar de espacios para la identacion");
+      }
+    } else {
+      if (indentMatch.includes(" ")) {
+        findings.push(fileLabel + ":" + (i + 1) + " - La linea debio usar tabulaciones en lugar de espacios para la identacion");
+      }
+    }
+    indentationPrevious = indentMatch;
+  });
+}
+
+// src/envAnalyzer.ts
+function analyzeEnvVariables(lines, fileLabel, findings) {
+  const variables = [];
+  lines.forEach((line) => {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) {
+      return;
+    }
+    const variableName = trimmed.split("=")[0].trim();
+    variables.push(variableName);
+  });
+  variables.forEach((name) => {
+    const isUpperCase = /^[A-Z][A-Z0-9_]*$/.test(name);
+    if (!isUpperCase) {
+      findings.push(fileLabel + " - La variable " + name + " no usa UPPER_SNAKE_CASE");
+    }
+  });
+}
+
+// src/codeReviewerCommand.ts
+function registerCodeReviewerCommand(context) {
+  const disposable = vscode.commands.registerCommand("codeadvisor.codeReviwer", async () => {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder) {
       vscode.window.showErrorMessage("Abra una carpeta que sea un repositorio de git primero");
+      return;
+    }
+    const findings = [];
+    const excludePattern = "{**/node_modules/**,**/dist/**,**/out/**,**/.git/**,**/build/**}";
+    const codeFiles = await vscode.workspace.findFiles("**/*.{ts,tsx,js,jsx,php,cs}", excludePattern);
+    const envFiles = await vscode.workspace.findFiles("**/.env*", excludePattern);
+    for (const uri of codeFiles) {
+      const fileLabel = vscode.workspace.asRelativePath(uri);
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      const lines = Buffer.from(bytes).toString("utf8").split("\n");
+      analyzeIndentation(lines, fileLabel, findings);
+      const extension = fileLabel.split(".").pop() ?? "";
+      const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
+      if (languageId) {
+        analyzeNaming(lines, languageId, fileLabel, findings);
+      }
+    }
+    for (const uri of envFiles) {
+      const fileLabel = vscode.workspace.asRelativePath(uri);
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      const lines = Buffer.from(bytes).toString("utf8").split("\n");
+      analyzeEnvVariables(lines, fileLabel, findings);
+    }
+    const reportContent = findings.length > 0 ? findings.join("\n") : "No se encontraron hallazgos.";
+    const reportUri = vscode.Uri.joinPath(folder.uri, "code-advisor-report.txt");
+    await vscode.workspace.fs.writeFile(reportUri, Buffer.from(reportContent, "utf8"));
+    const reportDocument = await vscode.workspace.openTextDocument(reportUri);
+    await vscode.window.showTextDocument(reportDocument);
+  });
+  context.subscriptions.push(disposable);
+}
+
+// src/extension.ts
+function activate(context) {
+  console.log('Congratulations, your extension "codeadvisor" is now active!');
+  const disposable = vscode2.commands.registerCommand("codeadvisor.gitVerification", () => {
+    const folder = vscode2.workspace.workspaceFolders?.[0];
+    if (!folder) {
+      vscode2.window.showErrorMessage("Abra una carpeta que sea un repositorio de git primero");
     }
     const folderPath = folder?.uri.fsPath;
-    const git = vscode.extensions.getExtension("vscode.git")?.exports.getAPI(1);
-    const repo = folderPath ? git?.getRepository(vscode.Uri.file(folderPath)) : void 0;
+    const git = vscode2.extensions.getExtension("vscode.git")?.exports.getAPI(1);
+    const repo = folderPath ? git?.getRepository(vscode2.Uri.file(folderPath)) : void 0;
     if (!repo) {
-      vscode.window.showErrorMessage("No se pudo encontrar un repositorio de git en la carpeta abierta");
+      vscode2.window.showErrorMessage("No se pudo encontrar un repositorio de git en la carpeta abierta");
     }
   });
-  const disposable2 = vscode.commands.registerCommand("codeadvisor.codeReviwer", () => {
-    const tab_size = 4;
-    function countSpaces(indent) {
-      let ancho = 0;
-      for (const char of indent) {
-        ancho += char === "	" ? tab_size : 1;
-      }
-      return ancho;
-    }
-    let indentationPrevious = "";
-    const documentText = vscode.window.activeTextEditor?.document.getText() || "";
-    const lines = documentText.split("\n");
-    lines.forEach((line, i) => {
-      if (line.trim() === "") {
-        return;
-      }
-      const indentMatch = line.match(/^[ \t]*/)?.[0] ?? "";
-      const currentWide = countSpaces(indentMatch);
-      const previousWide = countSpaces(indentationPrevious);
-      if (currentWide > previousWide) {
-        const newPart = indentMatch.slice(indentationPrevious.length);
-        if (newPart.includes(" ")) {
-          vscode.window.showWarningMessage("La linea " + (i + 1) + " debio usar tabulaciones en lugar de espacios para la identacion");
-        }
-      } else {
-        if (indentMatch.includes(" ")) {
-          vscode.window.showWarningMessage("La linea " + (i + 1) + " debio usar tabulaciones en lugar de espacios para la identacion");
-        }
-      }
-      indentationPrevious = indentMatch;
-    });
-    const activeFileName = vscode.window.activeTextEditor?.document.fileName ?? "";
-    const activeBaseName = activeFileName.split(/[\\/]/).pop() ?? "";
-    const isEnvFile = activeBaseName === ".env" || activeBaseName.startsWith(".env.");
-    const variables = [];
-    if (isEnvFile) {
-      lines.forEach((line) => {
-        const trimmed = line.trim();
-        if (trimmed === "" || trimmed.startsWith("#")) {
-          return;
-        }
-        const variableName = trimmed.split("=")[0].trim();
-        variables.push(variableName);
-      });
-    }
-    variables.forEach((name) => {
-      const isUpperCase = /^[A-Z][A-Z0-9_]*$/.test(name);
-      if (!isUpperCase) {
-        vscode.window.showErrorMessage("La variable " + name + " no usa UPPER_SNAKE_CASE");
-      }
-    });
-    const languageId = vscode.window.activeTextEditor?.document.languageId ?? "";
-    const namingConfig = LANGUAGE_NAMING_CONFIGS[languageId];
-    if (!namingConfig) {
-      vscode.window.showInformationMessage('La verificaci\xF3n de nombres no soporta el lenguaje "' + languageId + '". Lenguajes soportados: JavaScript, TypeScript, PHP y C#.');
-    } else {
-      const { classNames, functionNames, methodNames, variableNames, constantNames } = extractNamesByCategory(lines, namingConfig);
-      reportInvalidNames(classNames, namingConfig.classCase, "La clase");
-      reportInvalidNames(functionNames, namingConfig.functionCase, "La funci\xF3n");
-      reportInvalidNames(methodNames, namingConfig.methodCase, "El m\xE9todo");
-      reportInvalidNames(variableNames, namingConfig.variableCase, "La variable");
-      reportInvalidNames(constantNames, namingConfig.constantCase, "La constante");
-    }
-  });
-  context.subscriptions.push(disposable, disposable2);
+  registerCodeReviewerCommand(context);
+  context.subscriptions.push(disposable);
 }
 function deactivate() {
 }
