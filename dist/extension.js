@@ -293,6 +293,97 @@ function analyzeEnvVariables(lines, fileLabel, findings) {
   });
 }
 
+// src/ifAnalyzer.ts
+function stripLineComment(rawLine) {
+  const commentIndex = rawLine.indexOf("//");
+  return commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
+}
+function findMatchingParenClose(text, openIndex) {
+  let depth = 0;
+  for (let i = openIndex; i < text.length; i++) {
+    if (text[i] === "(") {
+      depth++;
+    } else if (text[i] === ")") {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+function checkBraceUsage(bodyOnSameLine, keywordLineIndex, lines, label, fileLabel, findings) {
+  if (bodyOnSameLine !== "") {
+    if (!bodyOnSameLine.startsWith("{")) {
+      findings.push(fileLabel + ":" + (keywordLineIndex + 1) + " - El " + label + " de una sola instruccion debe usar llaves {}");
+    }
+    return;
+  }
+  for (let j = keywordLineIndex + 1; j < lines.length; j++) {
+    const nextTrimmed = stripLineComment(lines[j]).trim();
+    if (nextTrimmed === "") {
+      continue;
+    }
+    if (!nextTrimmed.startsWith("{")) {
+      findings.push(fileLabel + ":" + (keywordLineIndex + 1) + " - El " + label + " de una sola instruccion debe usar llaves {}");
+    }
+    break;
+  }
+}
+function countTernaryOperators(trimmedLine) {
+  return (trimmedLine.match(/(?<!\?)\?(?!\.|\?)/g) ?? []).length;
+}
+function isTernaryContinuation(trimmedLine) {
+  return /^\?(?!\.|\?)/.test(trimmedLine) || trimmedLine.startsWith(":");
+}
+function checkNestedTernaries(lines, fileLabel, findings) {
+  let i = 0;
+  while (i < lines.length) {
+    const trimmed = stripLineComment(lines[i]).trim();
+    let totalTernaryCount = countTernaryOperators(trimmed);
+    if (totalTernaryCount === 0) {
+      i++;
+      continue;
+    }
+    let j = i + 1;
+    while (j < lines.length) {
+      const nextTrimmed = stripLineComment(lines[j]).trim();
+      if (!isTernaryContinuation(nextTrimmed)) {
+        break;
+      }
+      totalTernaryCount += countTernaryOperators(nextTrimmed);
+      j++;
+    }
+    if (totalTernaryCount >= 2) {
+      findings.push(fileLabel + ":" + (i + 1) + ' - Se encontraron operadores ternarios anidados, evita anidar "?:"');
+    }
+    i = j;
+  }
+}
+function analyzeIfStatements(lines, fileLabel, findings) {
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment(rawLine);
+    const trimmed = line.trim();
+    const elseCandidate = trimmed.startsWith("}") ? trimmed.replace(/^\}\s*/, "") : trimmed;
+    const ifMatch = trimmed.match(/^if\s*\(/);
+    const elseIfMatch = elseCandidate.match(/^else\s+if\s*\(/);
+    if (ifMatch || elseIfMatch) {
+      const source = ifMatch ? trimmed : elseCandidate;
+      const label = ifMatch ? "if" : "else if";
+      const openIndex = (ifMatch ? ifMatch[0] : elseIfMatch[0]).length - 1;
+      const closeIndex = findMatchingParenClose(source, openIndex);
+      if (closeIndex !== -1) {
+        const bodyOnSameLine = source.slice(closeIndex + 1).trim();
+        checkBraceUsage(bodyOnSameLine, i, lines, label, fileLabel, findings);
+      }
+    } else if (/^else\b/.test(elseCandidate)) {
+      const bodyOnSameLine = elseCandidate.slice("else".length).trim();
+      checkBraceUsage(bodyOnSameLine, i, lines, "else", fileLabel, findings);
+    }
+  });
+  checkNestedTernaries(lines, fileLabel, findings);
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviwer", async () => {
@@ -310,6 +401,7 @@ function registerCodeReviewerCommand(context) {
       const bytes = await vscode.workspace.fs.readFile(uri);
       const lines = Buffer.from(bytes).toString("utf8").split("\n");
       analyzeIndentation(lines, fileLabel, findings);
+      analyzeIfStatements(lines, fileLabel, findings);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {

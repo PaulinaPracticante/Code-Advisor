@@ -3,6 +3,7 @@ import { EXTENSION_TO_LANGUAGE_ID } from './namingConfig';
 import { analyzeNaming } from './namingAnalyzer';
 import { analyzeIndentation } from './indentationAnalyzer';
 import { analyzeEnvVariables } from './envAnalyzer';
+import { analyzeIfStatements } from './ifAnalyzer';
 
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
 export function registerCodeReviewerCommand(context: vscode.ExtensionContext): void {
@@ -33,6 +34,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const lines = Buffer.from(bytes).toString('utf8').split('\n'); // Se divide el texto del documento en lineas
 
 			analyzeIndentation(lines, fileLabel, findings);
+			analyzeIfStatements(lines, fileLabel, findings);
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
