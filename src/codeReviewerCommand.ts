@@ -4,6 +4,7 @@ import { analyzeNaming } from './namingAnalyzer';
 import { analyzeIndentation } from './indentationAnalyzer';
 import { analyzeEnvVariables } from './envAnalyzer';
 import { analyzeIfStatements } from './ifAnalyzer';
+import { analyzeParameters } from './parameterAnalyzer';
 
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
 export function registerCodeReviewerCommand(context: vscode.ExtensionContext): void {
@@ -27,6 +28,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 		// --------------------------------------------------------------------------------------
 		// ---- IDENTACION Y NOMBRES DE CLASES, FUNCIONES, METODOS, VARIABLES Y CONSTANTES ------
+		// ---- PARAMETROS ----------------------------------------------------------------------
 
 		for (const uri of codeFiles) {
 			const fileLabel = vscode.workspace.asRelativePath(uri); // Ruta relativa del archivo, para identificarlo en el reporte
@@ -35,6 +37,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 			analyzeIndentation(lines, fileLabel, findings);
 			analyzeIfStatements(lines, fileLabel, findings);
+			analyzeParameters(lines, fileLabel, findings);
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
