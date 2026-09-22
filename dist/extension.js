@@ -459,6 +459,88 @@ function analyzeParameters(lines, fileLabel, findings) {
   });
 }
 
+// src/requestModelAnalyzer.ts
+function stripLineComment3(rawLine) {
+  const commentIndex = rawLine.indexOf("//");
+  return commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
+}
+var REQUEST_NAME_SUFFIXES = ["Request", "Dto", "Input", "Command", "Query", "Payload"];
+var REQUEST_FOLDER_KEYWORDS = ["request", "dtos", "dto", "inputs", "contracts"];
+function isRequestClassName(className) {
+  return REQUEST_NAME_SUFFIXES.some((suffix) => new RegExp(`${suffix}$`, "i").test(className));
+}
+function isInRequestFolder(fileLabel) {
+  const normalized = fileLabel.toLowerCase().replace(/\\/g, "/");
+  return REQUEST_FOLDER_KEYWORDS.some((folder) => normalized.includes(`/${folder}/`));
+}
+function extendsOrImplementsRequest(classDeclarationLine) {
+  return /\b(?:extends|implements|:)\s+[\w<>,\s]*Request/i.test(classDeclarationLine);
+}
+function isRequestModel(className, classDeclarationLine, fileLabel) {
+  return isRequestClassName(className) || isInRequestFolder(fileLabel) || extendsOrImplementsRequest(classDeclarationLine);
+}
+var CSHARP_CONFIG = {
+  classPattern: /^(?:(?:public|private|protected|internal|static|abstract|sealed|partial)\s+)*class\s+([A-Za-z0-9_]*)/,
+  // public int Cantidad { get; set; } (sin "= valor" antes del ";")
+  missingDefaultPattern: /^(?:public|private|protected|internal)\s+(?:readonly\s+)?[\w<>[\],.?]+\s+[A-Za-z_][A-Za-z0-9_]*\s*\{\s*get;\s*(?:set;|init;)\s*\}\s*;?\s*$/
+};
+var TS_CONFIG = {
+  classPattern: /^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)/,
+  // "nombreCliente: string;" (si "= valor" antes del ";")
+  missingDefaultPattern: /^(?:public|private|protected|readonly\s+)*[A-Za-z_$][A-Za-z0-9_$]*\??\s*:\s*[^=;]+;\s*$/
+};
+var JS_CONFIG = {
+  classPattern: /^(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)/,
+  // "cantidad;" (campo de clase sin inicializador; JS no tiene tipos que validar)
+  missingDefaultPattern: /^[A-Za-z_$][A-Za-z0-9_$]*\s*;\s*$/
+};
+var PHP_CONFIG = {
+  classPattern: /^(?:abstract\s+|final\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)/,
+  // "public int $cantidad;" (sin "= valor" antes del ";")
+  missingDefaultPattern: /^(?:public|private|protected)\s+\??(?:int|float|string|bool|array|object|mixed|[A-Z][A-Za-z0-9_]*)\s+\$[A-Za-z_][A-Za-z0-9_]*\s*;\s*$/
+};
+var EXTENSION_TO_CONFIG = {
+  cs: CSHARP_CONFIG,
+  ts: TS_CONFIG,
+  tsx: TS_CONFIG,
+  js: JS_CONFIG,
+  jsx: JS_CONFIG,
+  php: PHP_CONFIG
+};
+function analyzeRequestModels(lines, fileLabel, findings) {
+  const extension = fileLabel.split(".").pop() ?? "";
+  const config = EXTENSION_TO_CONFIG[extension];
+  if (!config) {
+    return;
+  }
+  let insideRequestClass = false;
+  let depth = 0;
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment3(rawLine).trim();
+    const classMatch = line.match(config.classPattern);
+    if (classMatch) {
+      insideRequestClass = isRequestModel(classMatch[1], line, fileLabel);
+      depth = 0;
+    }
+    if (!insideRequestClass) {
+      return;
+    }
+    if (line.includes("{")) {
+      depth++;
+    }
+    if (line.includes("}")) {
+      depth--;
+      if (depth <= 0) {
+        insideRequestClass = false;
+        return;
+      }
+    }
+    if (config.missingDefaultPattern.test(line)) {
+      findings.push(fileLabel + ":" + (i + 1) + ' - La propiedad debe inicializar con un valor por default (ej. 0, "", string.Empty)');
+    }
+  });
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviwer", async () => {
@@ -478,6 +560,7 @@ function registerCodeReviewerCommand(context) {
       analyzeIndentation(lines, fileLabel, findings);
       analyzeIfStatements(lines, fileLabel, findings);
       analyzeParameters(lines, fileLabel, findings);
+      analyzeRequestModels(lines, fileLabel, findings);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {

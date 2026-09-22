@@ -5,6 +5,7 @@ import { analyzeIndentation } from './indentationAnalyzer';
 import { analyzeEnvVariables } from './envAnalyzer';
 import { analyzeIfStatements } from './ifAnalyzer';
 import { analyzeParameters } from './parameterAnalyzer';
+import { analyzeRequestModels } from './requestModelAnalyzer';
 
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
 export function registerCodeReviewerCommand(context: vscode.ExtensionContext): void {
@@ -38,6 +39,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			analyzeIndentation(lines, fileLabel, findings);
 			analyzeIfStatements(lines, fileLabel, findings);
 			analyzeParameters(lines, fileLabel, findings);
+			analyzeRequestModels(lines, fileLabel, findings);
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
