@@ -541,6 +541,85 @@ function analyzeRequestModels(lines, fileLabel, findings) {
   });
 }
 
+// src/dtoAutoMapperAnalyzer.ts
+var MAX_PROPERTIES_WITHOUT_AUTOMAPPER = 15;
+var MIN_MANUAL_ASSIGNMENTS = 3;
+function stripLineComment4(rawLine) {
+  const commentIndex = rawLine.indexOf("//");
+  return commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
+}
+var CLASS_PATTERN = /^(?:(?:public|private|protected|internal|static|abstract|sealed|partial)\s+)*class\s+([A-Za-z0-9_]*)/;
+var PROPERTY_PATTERN = /^(?:public|private|protected|internal)\s+(?:readonly\s+)?[\w<>[\],.?]+\s+[A-Za-z_][A-Za-z0-9_]*\s*\{\s*get;\s*(?:set;|init;)?\s*\}/;
+var NEW_INSTANCE_PATTERN = /\b(?:var|[A-Za-z_][A-Za-z0-9_<>]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/;
+var MANUAL_ASSIGNMENT_PATTERN = /^([A-Za-z_][A-Za-z0-9_]*)\.\w+\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.\w+\s*;/;
+function analyzeDtoAutoMapper(lines, fileLabel, findings) {
+  if (!fileLabel.endsWith(".cs")) {
+    return;
+  }
+  const bigClasses = /* @__PURE__ */ new Set();
+  const variableTypes = /* @__PURE__ */ new Map();
+  let currentClassName = null;
+  let propertyCount = 0;
+  let depth = 0;
+  lines.forEach((rawLine) => {
+    const line = stripLineComment4(rawLine).trim();
+    const classMatch = line.match(CLASS_PATTERN);
+    if (classMatch) {
+      currentClassName = classMatch[1];
+      propertyCount = 0;
+      depth = 0;
+    }
+    if (currentClassName) {
+      if (PROPERTY_PATTERN.test(line)) {
+        propertyCount++;
+      }
+      if (line.includes("{")) {
+        depth++;
+      }
+      if (line.includes("}")) {
+        depth--;
+        if (depth <= 0) {
+          if (propertyCount >= MAX_PROPERTIES_WITHOUT_AUTOMAPPER) {
+            bigClasses.add(currentClassName);
+          }
+          currentClassName = null;
+        }
+      }
+    }
+  });
+  let streak = 0;
+  let streakTarget = "";
+  let streakStartLine = 0;
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment4(rawLine).trim();
+    const newInstanceMatch = line.match(NEW_INSTANCE_PATTERN);
+    if (newInstanceMatch) {
+      variableTypes.set(newInstanceMatch[1], newInstanceMatch[2]);
+    }
+    const assignMatch = line.match(MANUAL_ASSIGNMENT_PATTERN);
+    if (assignMatch && assignMatch[1] === streakTarget) {
+      streak++;
+    } else if (assignMatch) {
+      streak = 1;
+      streakTarget = assignMatch[1];
+      streakStartLine = i;
+    } else {
+      streak = 0;
+      streakTarget = "";
+    }
+    const nextLine = lines[i + 1] ? stripLineComment4(lines[i + 1]).trim() : "";
+    const blockEnds = !MANUAL_ASSIGNMENT_PATTERN.test(nextLine);
+    if (assignMatch && blockEnds && streak >= MIN_MANUAL_ASSIGNMENTS) {
+      const targetClass = variableTypes.get(streakTarget);
+      if (targetClass && bigClasses.has(targetClass)) {
+        findings.push(
+          fileLabel + ":" + (streakStartLine + 1) + ' - "' + targetClass + '" tiene mas de ' + MAX_PROPERTIES_WITHOUT_AUTOMAPPER + " propiedades, usa AutoMapper (_mapper.Map<" + targetClass + ">(...)) en lugar de asignar cada propiedad manualmente"
+        );
+      }
+    }
+  });
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviwer", async () => {
@@ -561,6 +640,7 @@ function registerCodeReviewerCommand(context) {
       analyzeIfStatements(lines, fileLabel, findings);
       analyzeParameters(lines, fileLabel, findings);
       analyzeRequestModels(lines, fileLabel, findings);
+      analyzeDtoAutoMapper(lines, fileLabel, findings);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {
