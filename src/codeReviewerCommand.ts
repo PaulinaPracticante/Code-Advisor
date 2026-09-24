@@ -7,6 +7,7 @@ import { analyzeIfStatements } from './ifAnalyzer';
 import { analyzeParameters } from './parameterAnalyzer';
 import { analyzeRequestModels } from './requestModelAnalyzer';
 import { analyzeDtoAutoMapper } from './dtoAutoMapperAnalyzer';
+import { analyzeLinqUsage } from './linqAnalyzer';
 
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
 export function registerCodeReviewerCommand(context: vscode.ExtensionContext): void {
@@ -42,6 +43,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			analyzeParameters(lines, fileLabel, findings);
 			analyzeRequestModels(lines, fileLabel, findings);
 			analyzeDtoAutoMapper(lines, fileLabel, findings);
+			analyzeLinqUsage(lines, fileLabel, findings);
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo

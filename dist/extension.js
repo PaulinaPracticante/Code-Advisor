@@ -620,6 +620,99 @@ function analyzeDtoAutoMapper(lines, fileLabel, findings) {
   });
 }
 
+// src/linqAnalyzer.ts
+var FOREACH_PATTERN = /^foreach\s*\(\s*(?:var|[\w<>[\],.]+)\s+([A-Za-z_]\w*)\s+in\s+([A-Za-z_][\w.]*)\s*\)/;
+var FOR_INDEXED_PATTERN = /^for\s*\(\s*int\s+([A-Za-z_]\w*)\s*=\s*0\s*;\s*\1\s*<\s*([A-Za-z_][\w.]*)\.Count\s*;\s*\1\+\+\s*\)/;
+var IF_PATTERN = /^if\s*\((.+)\)/;
+var ADD_CALL_PATTERN = /^([A-Za-z_]\w*)\.Add\(\s*(.+?)\s*\)\s*;/;
+var INCREMENT_PATTERN = /^([A-Za-z_]\w*)\s*(?:\+\+|\+=\s*1\s*;)/;
+var ACCUMULATE_PATTERN = /^([A-Za-z_]\w*)\s*\+=\s*(.+?)\s*;/;
+var ASSING_PATTERN = /^([A-Za-z_]\w*)\s*=\s*(.+?)\s*;/;
+var BREAK_PATTERN = /^break\s*;/;
+function analyzeLinqUsage(lines, fileLabel, findings) {
+  if (!fileLabel.endsWith(".cs")) {
+    return;
+  }
+  let depth = 0;
+  let insideLoop = false;
+  let loopStartLine = 0;
+  let loopVar = "";
+  let sourceCollection = "";
+  let sawIf = false;
+  let sawAdd = false;
+  let sawIncrement = false;
+  let sawSum = false;
+  let sawAssignThenBreak = false;
+  let lastAssignVar = null;
+  lines.forEach((rawLine, i) => {
+    const line = rawLine.trim();
+    const foreachMatch = line.match(FOREACH_PATTERN);
+    const forMatch = line.match(FOR_INDEXED_PATTERN);
+    if ((foreachMatch || forMatch) && !insideLoop) {
+      insideLoop = true;
+      loopStartLine = i;
+      loopVar = foreachMatch ? foreachMatch[1] : forMatch[1];
+      sourceCollection = foreachMatch ? foreachMatch[2] : forMatch[2];
+      depth = 0;
+      sawIf = sawAdd = sawIncrement = sawSum = sawAssignThenBreak = false;
+      lastAssignVar = null;
+    }
+    if (insideLoop) {
+      if (IF_PATTERN.test(line)) {
+        sawIf = true;
+      }
+      if (ADD_CALL_PATTERN.test(line)) {
+        sawAdd = true;
+      }
+      if (INCREMENT_PATTERN.test(line)) {
+        sawIncrement = true;
+      } else {
+        const accumulateMatch = line.match(ACCUMULATE_PATTERN);
+        if (accumulateMatch) {
+          sawSum = true;
+        }
+      }
+      const assignMatch = line.match(ASSING_PATTERN);
+      if (assignMatch) {
+        lastAssignVar = assignMatch[1];
+      }
+      if (BREAK_PATTERN.test(line) && lastAssignVar) {
+        sawAssignThenBreak = true;
+      }
+      if (line.includes("{")) {
+        depth++;
+      }
+      if (line.includes("}")) {
+        depth--;
+        if (depth <= 0) {
+          if (sawIf && sawAdd) {
+            findings.push(
+              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza el loop manual por "' + sourceCollection + ".Where(" + loopVar + " => condicion).Select(" + loopVar + ' => valor).ToList()" para mejorar la legibilidad'
+            );
+          } else if (sawAdd) {
+            findings.push(
+              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza la transformacion manual por "' + sourceCollection + ".Select(" + loopVar + ' => valor).ToList()" en lugar de usar Add() dentro del loop'
+            );
+          } else if (sawIf && sawIncrement) {
+            findings.push(
+              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza el conteo manual por "' + sourceCollection + ".Count(" + loopVar + ' => condicion)"'
+            );
+          } else if (sawSum) {
+            findings.push(
+              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza la acumulacion manual por "' + sourceCollection + ".Sum(" + loopVar + ' => valor)" en lugar de sumar dentro de un loop'
+            );
+          } else if (sawIf && sawAssignThenBreak) {
+            findings.push(
+              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza la busqueda manual por "' + sourceCollection + ".FirstOrDefault(" + loopVar + ' => condicion)"'
+            );
+          }
+          insideLoop = false;
+        }
+      }
+    }
+  });
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviwer", async () => {
@@ -641,6 +734,7 @@ function registerCodeReviewerCommand(context) {
       analyzeParameters(lines, fileLabel, findings);
       analyzeRequestModels(lines, fileLabel, findings);
       analyzeDtoAutoMapper(lines, fileLabel, findings);
+      analyzeLinqUsage(lines, fileLabel, findings);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {
