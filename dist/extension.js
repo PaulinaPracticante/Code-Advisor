@@ -713,9 +713,99 @@ function analyzeLinqUsage(lines, fileLabel, findings) {
   });
 }
 
+// src/asyncAnalyzer.ts
+var METHOD_PATTERN = /^(?:public|private|protected|internal|static)(?:\s+(?:public|private|protected|internal|static|virtual|override|sealed))*\s+(async\s+)?([\w<>[\],.?\s]+?)\s+([A-Za-z_]\w*)\s*\(/;
+var EVENT_HANDLER_PATTERN = /\(\s*object\s+\w+\s*,\s*\w*EventArgs\s+\w+\s*\)/;
+var AWAIT_PATTERN = /\bawait\b/;
+var BLOCKING_PATTERN = /\.Result\b|\.Wait\(\s*\)|\.GetAwaiter\(\)\.GetResult\(\)/;
+var THREAD_SLEEP_PATTERN = /\bThread\.Sleep\s*\(/;
+var ASYNC_CALL_PATTERN = /\b([A-Za-z_]\w*Async)\s*\(/;
+var ASYNC_CALL_HANDLED_PATTERN = /\bawait\b|\breturn\b|=\s*[^=]|Task\.(?:WhenAll|WhenAny)/;
+var SYNC_IO_CALLS = [
+  [/\.SaveChanges\s*\(/, "SaveChanges", "SaveChangesAsync"],
+  [/\bFile\.ReadAllText\s*\(/, "File.ReadAllText", "File.ReadAllTextAsync"],
+  [/\bFile\.WriteAllText\s*\(/, "File.WriteAllText", "File.WriteAllTextAsync"],
+  [/\bFile\.AppendAllText\s*\(/, "File.AppendAllText", "File.AppendAllTextAsync"],
+  [/\bFile\.ReadAllBytes\s*\(/, "File.ReadAllBytes", "File.ReadAllBytesAsync"],
+  [/\.ReadToEnd\s*\(/, "ReadToEnd", "ReadToEndAsync"],
+  [/\.ExecuteReader\s*\(/, "ExecuteReader", "ExecuteReaderAsync"],
+  [/\.ExecuteNonQuery\s*\(/, "ExecuteNonQuery", "ExecuteNonQueryAsync"],
+  [/\.Send\s*\(\s*\w*[Rr]equest/, "HttpClient.Send", "SendAsync"]
+];
+var EF_CONTEXT_PATTERN = /\b_?(?:context|db|dbContext)\b\./i;
+var EF_SYNC_QUERY_PATTERN = /\.(ToList|FirstOrDefault|SingleOrDefault|Any|Count|Find)\s*\(/;
+function analyzeAsyncUsage(lines, fileLabel, findings) {
+  if (!fileLabel.endsWith("cs")) {
+    return;
+  }
+  let insideMethod = false;
+  let methodStartLine = 0;
+  let methodName = "";
+  let isAsync = false;
+  let sawAwait = false;
+  let depth = 0;
+  let bodyStarted = false;
+  lines.forEach((rawLine, i) => {
+    const line = rawLine.trim();
+    const where = fileLabel + ":" + (i + 1);
+    const methodMatch = line.match(METHOD_PATTERN);
+    if (methodMatch && !insideMethod) {
+      insideMethod = true;
+      methodStartLine = i;
+      isAsync = !!methodMatch[1];
+      methodName = methodMatch[3];
+      sawAwait = false;
+      depth = 0;
+      bodyStarted = false;
+      const returnType = methodMatch[2].trim();
+      if (isAsync && returnType === "void" && !EVENT_HANDLER_PATTERN.test(line)) {
+        findings.push(where + ' - el metodo"' + methodName + '"es async void; cambialo a "async Task" para poder esperarlo y capturar sus excepciones');
+      }
+    }
+    if (!insideMethod) {
+      return;
+    }
+    if (AWAIT_PATTERN.test(line)) {
+      sawAwait = true;
+    }
+    if (BLOCKING_PATTERN.test(line)) {
+      findings.push(where + ' - evita bloquear con .Result/.Wait()/GetResult(); usa "await" para no provocar deadlocks');
+    }
+    if (isAsync && THREAD_SLEEP_PATTERN.test(line)) {
+      findings.push(where + ' - usa "await Task.Delay(...)" en lugar de Thread.Sleep dentro de un metodo async');
+    }
+    const asyncCall = line.match(ASYNC_CALL_PATTERN);
+    if (asyncCall && asyncCall[1] !== methodName && !ASYNC_CALL_HANDLED_PATTERN.test(line)) {
+      findings.push(where + ' - la llamada a "' + asyncCall[1] + '" no se espera; agrega "await" para no dejar la tarea sin controlar');
+    }
+    for (const [pattern, syncName, asyncName] of SYNC_IO_CALLS) {
+      if (pattern.test(line) && !line.includes(asyncName)) {
+        findings.push(where + ' - "' + asyncName + '"es una operacion de E/S sincrona; usa "await ' + asyncName + '(...)" y marca el metodo como async');
+      }
+    }
+    const efMatch = line.match(EF_SYNC_QUERY_PATTERN);
+    if (efMatch && EF_CONTEXT_PATTERN.test(line)) {
+      findings.push(where + ' - la consulta a base de datos usa "' + efMatch[1] + '()"; usa "await ' + efMatch[1] + 'Async()" de EF Core');
+    }
+    const opens = (line.match(/{/g) || []).length;
+    const closes = (line.match(/}/g) || []).length;
+    if (opens > 0) {
+      bodyStarted = true;
+    }
+    depth += opens - closes;
+    const isExpressionBodied = !bodyStarted && line.includes("=>") && line.endsWith(";");
+    if (bodyStarted && depth <= 0 || isExpressionBodied) {
+      if (isAsync && !sawAwait) {
+        findings.push(fileLabel + ":" + (methodStartLine + 1) + ' - el metodo "' + methodName + '" es async pero no contiene ningun await; quita "async" o espera la operacion de E/S');
+      }
+      insideMethod = false;
+    }
+  });
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
-  const disposable = vscode.commands.registerCommand("codeadvisor.codeReviwer", async () => {
+  const disposable = vscode.commands.registerCommand("codeadvisor.codeReviewer", async () => {
     const folder = vscode.workspace.workspaceFolders?.[0];
     if (!folder) {
       vscode.window.showErrorMessage("Abra una carpeta que sea un repositorio de git primero");
@@ -735,6 +825,7 @@ function registerCodeReviewerCommand(context) {
       analyzeRequestModels(lines, fileLabel, findings);
       analyzeDtoAutoMapper(lines, fileLabel, findings);
       analyzeLinqUsage(lines, fileLabel, findings);
+      analyzeAsyncUsage(lines, fileLabel, findings);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {
