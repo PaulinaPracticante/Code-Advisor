@@ -8,10 +8,11 @@ import { analyzeParameters } from './parameterAnalyzer';
 import { analyzeRequestModels } from './requestModelAnalyzer';
 import { analyzeDtoAutoMapper } from './dtoAutoMapperAnalyzer';
 import { analyzeLinqUsage } from './linqAnalyzer';
+import { analyzeAsyncUsage } from './asyncAnalyzer';
 
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
 export function registerCodeReviewerCommand(context: vscode.ExtensionContext): void {
-	const disposable = vscode.commands.registerCommand('codeadvisor.codeReviwer', async () => {
+	const disposable = vscode.commands.registerCommand('codeadvisor.codeReviewer', async () => {
 
 		const folder = vscode.workspace.workspaceFolders?.[0]; // Se checa si hay una carpeta abierta en el workspace
 
@@ -44,6 +45,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			analyzeRequestModels(lines, fileLabel, findings);
 			analyzeDtoAutoMapper(lines, fileLabel, findings);
 			analyzeLinqUsage(lines, fileLabel, findings);
+			analyzeAsyncUsage(lines, fileLabel, findings);
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo

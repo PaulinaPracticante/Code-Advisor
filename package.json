@@ -9,7 +9,10 @@
   "categories": [
     "Other"
   ],
-  "activationEvents": [],
+  "activationEvents": [
+    "onCommand:codeadvisor.codeReviewer",
+    "onCommand:codeadvisor.gitVerification"
+  ],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -18,7 +21,7 @@
         "title": "Verificar Repositorio de Git"
       },
       {
-        "command": "codeadvisor.codeReviwer",
+        "command": "codeadvisor.codeReviewer",
         "title": "Revisar Código"
       }
     ]
