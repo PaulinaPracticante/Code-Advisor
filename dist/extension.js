@@ -803,6 +803,92 @@ function analyzeAsyncUsage(lines, fileLabel, findings) {
   });
 }
 
+// src/varAnalyze.ts
+var VAR_DECL_PATTERN = /^var\s+([A-Za-z_]\w*)\s*=\s*(.+?)\s*;\s*$/;
+var EXPLICIT_DECL_PATTERN = /^([A-Za-z_][\w<>[\],.?]*)\s+([A-Za-z_]\w*)\s*=\s*(.+?)\s*;\s*$/;
+var NEW_OBJECT_PATTERN = /^new\s+([A-Za-z_][\w<>[\],.]*)\s*[\(\{]/;
+var EXPLICIT_CAST_PATTERN = /^\(\s*[A-Za-z_][\w<>[\],.]*\s*\)\s*\S/;
+var LITERAL_PATTERN = /^(-?\d+(\.\d+)?[mMfFdDlLuU]?|true|false|null|'.'|".*")$/;
+var ASYNC_CALL_PATTERN2 = /\b[A-Za-z_]\w*Async\s*\(/;
+var METHOD_PATTERN2 = /^(?:public|private|protected|internal|static)(?:\s+(?:public|private|protected|internal|static|virtual|override|sealed))*\s+(async\s+)?([\w<>[\],.?\s]+?)\s+([A-Za-z_]\w*)\s*\(/;
+var RETURN_NEW_PATTERN = /^return\s+new\s+([A-Za-z_]\w*)\s*[\(\{]/;
+function analyzeVarUsage(lines, fileLabel, findings) {
+  if (!fileLabel.endsWith("cs")) {
+    return;
+  }
+  let insideMethod = false;
+  let isAsyncMethod = false;
+  let methodStartLine = 0;
+  let depth = 0;
+  let bodyStarted = false;
+  const returnedTypes = /* @__PURE__ */ new Set();
+  lines.forEach((rawLine, i) => {
+    const line = rawLine.trim();
+    const codeLine = line.replace(/\/\/.*$/, "").trim();
+    const where = fileLabel + ":" + (i + 1);
+    const methodMatch = line.match(METHOD_PATTERN2);
+    if (methodMatch && !insideMethod) {
+      insideMethod = true;
+      isAsyncMethod = !!methodMatch[1];
+      methodStartLine = i;
+      depth = 0;
+      bodyStarted = false;
+      returnedTypes.clear();
+    }
+    if (insideMethod) {
+      const returnMatch = line.match(RETURN_NEW_PATTERN);
+      if (returnMatch) {
+        returnedTypes.add(returnMatch[1]);
+      }
+      const opens = (line.match(/{/g) || []).length;
+      const closes = (line.match(/}/g) || []).length;
+      if (opens > 0) {
+        bodyStarted = true;
+      }
+      depth += opens - closes;
+      if (bodyStarted && depth <= 0) {
+        if (isAsyncMethod && returnedTypes.size > 1) {
+          findings.push(
+            fileLabel + ":" + (methodStartLine + 1) + " - este metodo async retorna distintos tipos concretos (" + Array.from(returnedTypes).join(", ") + '); evita "var" al capturar su resultado y usa el tipo de retorno explicito'
+          );
+        }
+        insideMethod = false;
+      }
+    }
+    const varMatch = codeLine.match(VAR_DECL_PATTERN);
+    if (varMatch) {
+      const [, varName, rhs] = varMatch;
+      if (LITERAL_PATTERN.test(rhs)) {
+        findings.push(
+          where + ' - "var ' + varName + '" se asigna un literal simple; declara el tipo primitivo explicito en vez de "var"'
+        );
+      } else if (!NEW_OBJECT_PATTERN.test(rhs) && !EXPLICIT_CAST_PATTERN.test(rhs) && !ASYNC_CALL_PATTERN2.test(rhs)) {
+        findings.push(
+          where + ' - "var ' + varName + '" no deja ver el tipo con solo leer la linea; usa el tipo explicito en vez de "var"'
+        );
+      }
+      return;
+    }
+    const explicitMatch = codeLine.match(EXPLICIT_DECL_PATTERN);
+    if (explicitMatch) {
+      const [, declaredType, varName, rhs] = explicitMatch;
+      if (declaredType === "var") {
+        return;
+      }
+      const newObjectMatch = rhs.match(NEW_OBJECT_PATTERN);
+      if (newObjectMatch && newObjectMatch[1] === declaredType) {
+        findings.push(
+          where + ' - "' + declaredType + " " + varName + '" repite el tipo que ya es evidente por "new ' + declaredType + '(...)"; usa "var" en vez del tipo explicito'
+        );
+      } else if (ASYNC_CALL_PATTERN2.test(rhs)) {
+        findings.push(
+          where + ' - "' + declaredType + " " + varName + '" declara el tipo de retorno de una llamada asincrona; usa "var" en vez de repetirlo'
+        );
+      }
+    }
+  });
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviewer", async () => {
@@ -826,6 +912,7 @@ function registerCodeReviewerCommand(context) {
       analyzeDtoAutoMapper(lines, fileLabel, findings);
       analyzeLinqUsage(lines, fileLabel, findings);
       analyzeAsyncUsage(lines, fileLabel, findings);
+      analyzeVarUsage(lines, fileLabel, findings);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {
