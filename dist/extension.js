@@ -889,6 +889,80 @@ function analyzeVarUsage(lines, fileLabel, findings) {
   });
 }
 
+// src/objectAnalyzer.ts
+function stripLineComment5(rawLine) {
+  const commentIndex = rawLine.indexOf("//");
+  return commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
+}
+var CS_OBJECT_DECL_PATTERN = /^(?:(?:public|private|protected|internal|static|readonly|const)\s+)*object\s+([A-Za-z_]\w*)\s*[=;]/;
+var CS_OBJECT_PARAM_PATTERN = /\bobject\s+([A-Za-z_]\w*)\s*[,)]/;
+var CS_OBJECT_RETURN_PATTERN = /^(?:(?:public|private|protected|internal|static|virtual|override|async)\s+)+object\s+([A-Za-z_]\w*)\s*\(/;
+var CS_NEW_OBJECT_PATTERN = /\bnew\s+object\s*\(\s*\)/;
+var CS_EQUALS_OVERRIDE_PATTERN = /\bEquals\s*\(\s*object\s+\w+\s*\)/;
+function analyzeCSharpObjectUsage(lines, fileLabel, findings) {
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment5(rawLine).trim();
+    const where = fileLabel + ":" + (i + 1);
+    if (CS_EQUALS_OVERRIDE_PATTERN.test(line)) {
+      return;
+    }
+    const declMatch = line.match(CS_OBJECT_DECL_PATTERN);
+    if (declMatch) {
+      findings.push(where + ' -"' + declMatch[1] + '" se declara como "object"; usa el tipo concreto que se va a guardar');
+    }
+    if (CS_NEW_OBJECT_PATTERN.test(line)) {
+      findings.push(where + ' - "new object()" no aporta nada; instancia el tipo real que necesitas');
+    }
+    const returnMatch = line.match(CS_OBJECT_RETURN_PATTERN);
+    if (returnMatch) {
+      findings.push(where + ' - el metodo "' + returnMatch[1] + '" retorna "object"; declara el tipo real que retorna');
+    } else {
+      const paramMatch = line.match(CS_OBJECT_PARAM_PATTERN);
+      if (paramMatch && !/object\s*\[\]/.test(line)) {
+        findings.push(where + ' - el parametro "' + paramMatch[1] + '" es de tipo "object"; usa el tipo concreto que se espera recibir');
+      }
+    }
+  });
+}
+var TS_OBJECT_TYPE_PATTERN = /:\s*(object|Object)\b(?!\s*[.\w])/;
+var TS_NEW_OBJECT_PATTERN = /\bnew\s+Object\s*\(\s*\)/;
+function analyzeTsObjectUsage(lines, fileLabel, findings) {
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment5(rawLine).trim();
+    const where = fileLabel + ":" + (i + 1);
+    const typeMatch = line.match(TS_OBJECT_TYPE_PATTERN);
+    if (typeMatch) {
+      findings.push(where + ' - se usa"' + typeMatch[1] + '" como tipo; declara una interfaz/type con las propiedades reales');
+    }
+    if (TS_NEW_OBJECT_PATTERN.test(line)) {
+      findings.push(where + ' - "new Object()" no aporta nada; usa un literal "{}" o una clase concreta');
+    }
+  });
+}
+var JS_NEW_OBJECT_PATTERN = /\bnew\s+Object\s*\(\s*\)/;
+var JSDOC_OBJECT_PATTERN = /@(?:param|returns?|type)\s*\{\s*Object\s*\}/;
+function analyzeJsObjectUsage(lines, fileLabel, findings) {
+  lines.forEach((rawLine, i) => {
+    const line = rawLine.trim();
+    const where = fileLabel + ":" + (i + 1);
+    if (JS_NEW_OBJECT_PATTERN.test(stripLineComment5(rawLine).trim())) {
+      findings.push(where + ' - "new Object()" no aporta nada; usa un literal "{}" o una clase concreta');
+    }
+    if (JSDOC_OBJECT_PATTERN.test(line)) {
+      findings.push(where + ' - el JSDoc documenta el tipo como "Object"; describe la forma real del dato con un @typedef');
+    }
+  });
+}
+function analyzeObjectUsage(lines, fileLabel, findings) {
+  if (fileLabel.endsWith(".cs")) {
+    analyzeCSharpObjectUsage(lines, fileLabel, findings);
+  } else if (fileLabel.endsWith(".ts") || fileLabel.endsWith(".tsx")) {
+    analyzeTsObjectUsage(lines, fileLabel, findings);
+  } else if (fileLabel.endsWith(".js") || fileLabel.endsWith(".jsx")) {
+    analyzeJsObjectUsage(lines, fileLabel, findings);
+  }
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviewer", async () => {
@@ -913,6 +987,7 @@ function registerCodeReviewerCommand(context) {
       analyzeLinqUsage(lines, fileLabel, findings);
       analyzeAsyncUsage(lines, fileLabel, findings);
       analyzeVarUsage(lines, fileLabel, findings);
+      analyzeObjectUsage(lines, fileLabel, findings);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {
