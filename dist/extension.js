@@ -963,6 +963,70 @@ function analyzeObjectUsage(lines, fileLabel, findings) {
   }
 }
 
+// src/stringInterpolationAnalyzer.ts
+function stripLineComment6(rawLine) {
+  const commentIndex = rawLine.indexOf("//");
+  return commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
+}
+var STRING_LITERAL = `["'][^"']*["']`;
+var CS_CONCAT_PATTERN = new RegExp(
+  `(?<!\\$)(?:${STRING_LITERAL})\\s*\\+\\s*[A-Za-z_]\\w*|[A-Za-z_]\\w*\\s*\\+\\s*(?<!\\$)(?:${STRING_LITERAL})`
+);
+var CS_SELF_CONCAT_PATTERN = /^([A-Za-z_]\w*)\s*(\+=|=\s*\1\s*\+)/;
+function analyzeCSharpConcat(lines, fileLabel, findings) {
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment6(rawLine).trim();
+    const where = fileLabel + ":" + (i + 1);
+    if (CS_SELF_CONCAT_PATTERN.test(line)) {
+      return;
+    }
+    if (CS_CONCAT_PATTERN.test(line)) {
+      findings.push(where + ' - se concatena con "+"; usa un string interpolado ($"...") en vez de concatenar');
+    }
+  });
+}
+var JS_CONCAT_PATTERN = new RegExp(
+  `(?:${STRING_LITERAL})\\s*\\+\\s*[A-Za-z_$][\\w$]*|[A-Za-z_$][\\w$]*\\s*\\+\\s*(?:${STRING_LITERAL})`
+);
+var JS_SELF_CONCAT_PATTERN = /^([A-Za-z_$][\w$]*)\s*(\+=|=\s*\1\s*\+)/;
+function analyzeJsTsConcat(lines, fileLabel, findings) {
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment6(rawLine).trim();
+    const where = fileLabel + ":" + (i + 1);
+    if (JS_SELF_CONCAT_PATTERN.test(line)) {
+      return;
+    }
+    if (JS_CONCAT_PATTERN.test(line)) {
+      findings.push(where + ' - se concatena con "+"; usa un template literal (`....${variable}...`) en vez de concatenar');
+    }
+  });
+}
+var PHP_CONCAT_PATTERN = new RegExp(
+  `(?:${STRING_LITERAL})\\s*\\.\\s*\\$[A-Za-z_]\\w*|\\$[A-Za-z_]\\w*\\s*\\.\\s*(?:${STRING_LITERAL})`
+);
+var PHP_SELF_CONCAT_PATTERN = /^(\$[A-Za-z_]\w*)\s*(\.=|=\s*\1\s*\.)/;
+function analyzePhpConcat(lines, fileLabel, findings) {
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment6(rawLine).trim();
+    const where = fileLabel + ":" + (i + 1);
+    if (PHP_SELF_CONCAT_PATTERN.test(line)) {
+      return;
+    }
+    if (PHP_CONCAT_PATTERN.test(line)) {
+      findings.push(where + ' - se concatena con "."; usa interpolacion nativa ("...$variable...") en vez de concatenar');
+    }
+  });
+}
+function analyzeStringInterpolation(lines, fileLabel, findings) {
+  if (fileLabel.endsWith(".cs")) {
+    analyzeCSharpConcat(lines, fileLabel, findings);
+  } else if (fileLabel.endsWith(".ts") || fileLabel.endsWith(".tsx") || fileLabel.endsWith(".js") || fileLabel.endsWith("jsx")) {
+    analyzeJsTsConcat(lines, fileLabel, findings);
+  } else if (fileLabel.endsWith(".php")) {
+    analyzePhpConcat(lines, fileLabel, findings);
+  }
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviewer", async () => {
@@ -988,6 +1052,7 @@ function registerCodeReviewerCommand(context) {
       analyzeAsyncUsage(lines, fileLabel, findings);
       analyzeVarUsage(lines, fileLabel, findings);
       analyzeObjectUsage(lines, fileLabel, findings);
+      analyzeStringInterpolation(lines, fileLabel, findings);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {

@@ -11,6 +11,7 @@ import { analyzeLinqUsage } from './linqAnalyzer';
 import { analyzeAsyncUsage } from './asyncAnalyzer';
 import { analyzeVarUsage } from './varAnalyze';
 import { analyzeObjectUsage } from './objectAnalyzer';
+import { analyzeStringInterpolation } from './stringInterpolationAnalyzer';
 
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
 export function registerCodeReviewerCommand(context: vscode.ExtensionContext): void {
@@ -50,6 +51,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			analyzeAsyncUsage(lines, fileLabel, findings);
 			analyzeVarUsage(lines, fileLabel, findings);
 			analyzeObjectUsage(lines, fileLabel, findings);
+			analyzeStringInterpolation(lines, fileLabel, findings);
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
