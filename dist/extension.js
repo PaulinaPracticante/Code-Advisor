@@ -734,10 +734,7 @@ var SYNC_IO_CALLS = [
 ];
 var EF_CONTEXT_PATTERN = /\b_?(?:context|db|dbContext)\b\./i;
 var EF_SYNC_QUERY_PATTERN = /\.(ToList|FirstOrDefault|SingleOrDefault|Any|Count|Find)\s*\(/;
-function analyzeAsyncUsage(lines, fileLabel, findings) {
-  if (!fileLabel.endsWith("cs")) {
-    return;
-  }
+function analyzeCSharpAsync(lines, fileLabel, findings) {
   let insideMethod = false;
   let methodStartLine = 0;
   let methodName = "";
@@ -801,6 +798,108 @@ function analyzeAsyncUsage(lines, fileLabel, findings) {
       insideMethod = false;
     }
   });
+}
+var JS_RESERVED_KEYWORDS = /^(if|for|while|switch|catch|function|return|new|typeof)$/;
+var JS_FUNCTION_DECL_PATTERN = /^(async\s+)?function\s*([A-Za-z_$][\w$]*)?\s*\(/;
+var JS_ARROW_FUNCTION_PATTERN = /^(?:export\s+)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*(async\s+)?\([^)]*\)\s*=>/;
+var JS_CLASS_METHOD_PATTERN = /^(async\s+)?(?:static\s+)?(?:get\s+|set\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/;
+var JS_SYNC_IO_CALLS = [
+  [/\bfs\.readFileSync\s*\(/, "fs.readFileSync", "fs.promises.readFile"],
+  [/\bfs\.writeFileSync\s*\(/, "fs.writeFileSync", "fs.promises.writeFile"],
+  [/\bexecSync\s*\(/, "execSync", "exec (promisify)"]
+];
+var JS_ASYNC_CALL_PATTERN = /\b([A-Za-z_$][\w$]*Async)\s*\(/;
+var JS_ASYNC_CALL_HANDLED_PATTERN = /\bawait\b|\breturn\b|\.then\s*\(|=\s*[^=]/;
+var JS_BLOCKING_PATTERN = /\bdeasync\s*\(|\.open\s*\(\s*['"][A-Z]+['"]\s*,\s*[^,]+,\s*false\s*\)/;
+function analyzeJsTsAsync(lines, fileLabel, findings) {
+  let insideFunction = false;
+  let functionStartLine = 0;
+  let functionName = "";
+  let isAsync = false;
+  let sawAwait = false;
+  let depth = 0;
+  let bodyStarted = false;
+  lines.forEach((rawLine, i) => {
+    const line = rawLine.trim();
+    const where = fileLabel + ":" + (i + 1);
+    if (!insideFunction) {
+      let match = line.match(JS_FUNCTION_DECL_PATTERN);
+      let candidateAsync = false;
+      let candidateName = "";
+      if (match) {
+        candidateAsync = !!match[1];
+        candidateName = match[2] || "(anonima)";
+      } else {
+        match = line.match(JS_ARROW_FUNCTION_PATTERN);
+        if (match) {
+          candidateName = match[1];
+          candidateAsync = !!match[2];
+        } else {
+          match = line.match(JS_ARROW_FUNCTION_PATTERN);
+          if (match) {
+            candidateName = match[1];
+            candidateAsync = !!match[2];
+          } else {
+            const classMatch = line.match(JS_CLASS_METHOD_PATTERN);
+            if (classMatch && !JS_RESERVED_KEYWORDS.test(classMatch[2])) {
+              match = classMatch;
+              candidateAsync = !!classMatch[1];
+              candidateName = classMatch[2];
+            } else {
+              match = null;
+            }
+          }
+        }
+        if (match) {
+          insideFunction = true;
+          functionStartLine = i;
+          functionName = candidateName;
+          isAsync = candidateAsync;
+          sawAwait = false;
+          depth = 0;
+          bodyStarted = false;
+        }
+      }
+      if (!insideFunction) {
+        return;
+      }
+      if (AWAIT_PATTERN.test(line)) {
+        sawAwait = true;
+      }
+      if (JS_BLOCKING_PATTERN.test(line)) {
+        findings.push(where + ' - evitar bloquear la ejecucion (deasync, XHR sincrono); usa "await" con una API asincrona');
+      }
+      const asyncCall = line.match(JS_ASYNC_CALL_PATTERN);
+      if (asyncCall && asyncCall[1] !== functionName && !JS_ASYNC_CALL_HANDLED_PATTERN.test(line)) {
+        findings.push(where + ' - la llamada a "' + asyncCall[1] + '" no se espera; agrega "await" para no dejar la promesa sin controlar');
+      }
+      for (const [pattern, syncName, asyncName] of JS_SYNC_IO_CALLS) {
+        if (pattern.test(line)) {
+          findings.push(where + ' -"' + syncName + '" es una operacion de E/S sincrona; usa "await ' + asyncName + '(...)" en su lugar');
+        }
+      }
+      const opens = (line.match(/{/g) || []).length;
+      const closes = (line.match(/}/g) || []).length;
+      if (opens > 0) {
+        bodyStarted = true;
+      }
+      depth += opens - closes;
+      const isExpressionBodied = !bodyStarted && line.includes("=>") && line.endsWith(";");
+      if (bodyStarted && depth <= 0 || isExpressionBodied) {
+        if (isAsync && !sawAwait) {
+          findings.push(fileLabel + ":" + (functionStartLine + 1) + ' - la funcion "' + functionName + '" es async pero no contiene ningun await; quita "async" o espera la operacion de E/S');
+        }
+        insideFunction = false;
+      }
+    }
+  });
+}
+function analyzeAsyncUsage(lines, fileLabel, findings) {
+  if (fileLabel.endsWith(".cs")) {
+    analyzeCSharpAsync(lines, fileLabel, findings);
+  } else if (fileLabel.endsWith(".ts") || fileLabel.endsWith(".tsx") || fileLabel.endsWith(".js") || fileLabel.endsWith(".jsx")) {
+    analyzeJsTsAsync(lines, fileLabel, findings);
+  }
 }
 
 // src/varAnalyze.ts
@@ -1027,6 +1126,235 @@ function analyzeStringInterpolation(lines, fileLabel, findings) {
   }
 }
 
+// src/exceptionHandlingAnalyzer.ts
+function stripLineComment7(rawLine) {
+  const commentIndex = rawLine.indexOf("//");
+  return commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
+}
+function checkRiskyPatterns(line, where, findings, tables) {
+  for (const table of tables) {
+    for (const [pattern, label] of table) {
+      if (pattern.test(line)) {
+        findings.push(where + ' - "' + label + '" se usa fuera de un try-catch; envuelve esta operacion para controlar sus excepciones');
+      }
+    }
+  }
+}
+var CS_TRY_PATTERN = /\btry\b/;
+var CS_CATCH_PATTERN = /\bcatch\b/;
+var CS_LOG_PATTERN = /\b(_?logger|Log|Trace)\.(Log|Error|Warn|Fatal|WriteLine)\s*\(/i;
+var CS_DB_PATTERNS = [
+  [/\bSqlCommand\b/, "SqlCommand"],
+  [/\.ExecuteReader\s*\(/, "ExecuteReader"],
+  [/\.ExecuteNonQuery\s*\(/, "ExecuteNonQuey"],
+  [/\.ExecuteScalar\s*\(/, "ExecuteScalar"],
+  [/\.SaveChanges\s*\(/, "SaveChanges"]
+];
+var CS_TX_PATTERNS = [
+  [/\bBeginTransaction\s*\(/, "BeginTransaction"],
+  [/\bTransactionScope\b/, "TrnsactionScope"],
+  [/\.Commit\s*\(\s*\)/, "Commit"],
+  [/\.Rollback\s*\(\s*\)/, "Rollback"]
+];
+var CS_THREAD_PATTERNS = [
+  [/\bnew\s+Thread\s*\(/, "new Thread"],
+  [/\bTask\.Run\s*\(/, "Task.Run"],
+  [/\bParallel\.(For|ForEach)\s*\(/, "Parallel.For/ForEach"],
+  [/\bThreadPool\.QueueUserWorkItem\s*\(/, "ThreadPool.QueueUserWorkItem"]
+];
+function analyzeCSharpExceptionHandling(lines, fileLabel, findings) {
+  let depth = 0;
+  const tryDepths = [];
+  let insideCatch = false;
+  let catchDepth = 0;
+  let catchStartLine = 0;
+  let catchHasBody = false;
+  let catchLogged = false;
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment7(rawLine).trim();
+    const where = fileLabel + ":" + (i + 1);
+    const opens = (line.match(/{/g) || []).length;
+    const closes = (line.match(/}/g) || []).length;
+    if (insideCatch) {
+      if (line.length > 0 && line !== "{" && line !== "}") {
+        catchHasBody = true;
+      }
+      if (CS_LOG_PATTERN.test(line)) {
+        catchLogged = true;
+      }
+    }
+    if (CS_CATCH_PATTERN.test(line)) {
+      insideCatch = true;
+      catchDepth = depth + opens;
+      catchStartLine = i;
+      catchHasBody = false;
+      catchLogged = false;
+    }
+    if (CS_TRY_PATTERN.test(line)) {
+      tryDepths.push(depth + opens);
+    }
+    const insideTry = tryDepths.length > 0;
+    if (!insideTry) {
+      checkRiskyPatterns(line, where, findings, [CS_DB_PATTERNS, CS_TX_PATTERNS, CS_THREAD_PATTERNS]);
+    }
+    depth += opens - closes;
+    if (tryDepths.length > 0 && depth < tryDepths[tryDepths.length - 1]) {
+      tryDepths.pop();
+    }
+    if (insideCatch && depth < catchDepth) {
+      if (!catchHasBody) {
+        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch esta vacio; maneja o registra la excepcion");
+      } else if (!catchLogged) {
+        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch no registra el error en bitacora; agrega un logger.Error/_logger.LogError");
+      }
+      insideCatch = false;
+    }
+  });
+}
+var JS_TRY_PATTERN = /\btry\b/;
+var JS_CATCH_PATTERN = /\bcatch\b/;
+var JS_LOG_PATTERN = /\b(console\.(error|warn)|logger\.(error|warn)|log\.(error|warn))\s*\(/i;
+var JS_DB_PATTERNS = [
+  [/\.query\s*\(/, ".query"],
+  [/\.execute\s*\(/, ".execute"],
+  [/\bpool\.query\s*\(/, "pool.query"],
+  [/\.findOne\s*\(/, ".findOne"],
+  [/\.save\s*\(/, ".save"]
+];
+var JS_TX_PATTERNS = [
+  [/\bsequelize\.transaction\s*\(/, "sequelize.transaction"],
+  [/\.startTransaction\s*\(/, "startTransaction"],
+  [/\.commitTransaction\s*\(/, "commitTransaction"],
+  [/\.abortTransaction\s*\(/, "abortTransaction"]
+];
+var JS_THREAD_PATTERNS = [
+  [/\bnew\s+Worker\s*\(/, "new Worker"],
+  [/\bcluster\.fork\s*\(/, "cluster.fork"],
+  [/\bchild_process\.fork\s*\(/, "child_process.fork"]
+];
+function analyzeJsTsExceptionHandling(lines, fileLabel, findings) {
+  let depth = 0;
+  const tryDepths = [];
+  let insideCatch = false;
+  let catchDepth = 0;
+  let catchStartLine = 0;
+  let catchHasBody = false;
+  let catchLogged = false;
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment7(rawLine).trim();
+    const where = fileLabel + ":" + (i + 1);
+    const opens = (line.match(/{/g) || []).length;
+    const closes = (line.match(/}/g) || []).length;
+    if (insideCatch) {
+      if (line.length > 0 && line !== "{" && line !== "}") {
+        catchHasBody = true;
+      }
+      ;
+      if (JS_LOG_PATTERN.test(line)) {
+        catchLogged = true;
+      }
+    }
+    if (JS_CATCH_PATTERN.test(line)) {
+      insideCatch = true;
+      catchDepth = depth + opens;
+      catchStartLine = i;
+      catchHasBody = false;
+      catchLogged = false;
+    }
+    if (JS_TRY_PATTERN.test(line)) {
+      tryDepths.push(depth + opens);
+    }
+    const insideTry = tryDepths.length > 0;
+    if (!insideTry) {
+      checkRiskyPatterns(line, where, findings, [JS_DB_PATTERNS, JS_TX_PATTERNS, JS_THREAD_PATTERNS]);
+    }
+    depth += opens - closes;
+    if (tryDepths.length > 0 && depth < tryDepths[tryDepths.length - 1]) {
+      tryDepths.pop();
+    }
+    if (insideCatch && depth < catchDepth) {
+      if (!catchHasBody) {
+        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch esta vacio; maneja o registra el error");
+      } else if (!catchLogged) {
+        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch no registra el error en bitacora; agrega un console.error/logger.error");
+      }
+      insideCatch = false;
+    }
+  });
+}
+var PHP_TRY_PATTERN = /\btry\b/;
+var PHP_CATCH_PATTERN = /\bcatch\b/;
+var PHP_LOG_PATTERN = /\b(error_log\s*\(|Log::(error|warning)\s*\()/i;
+var PHP_DB_PATTERNS = [
+  [/->query\s*\(/, "->query"],
+  [/->exec\s*\(/, "->exec"],
+  [/\bmysqli_query\s*\(/, "mysqli_query"],
+  [/->prepare\s*\(/, "->prepare"]
+];
+var PHP_TX_PATTERNS = [
+  [/->beginTransaction\s*\(/, "->beginTransaction"],
+  [/->commit\s*\(\s*\)/, "->commit"],
+  [/->rollBack\s*\(\s*\)/, "->rollBack"]
+];
+function analyzePhpExceptionHandling(lines, fileLabel, findings) {
+  let depth = 0;
+  const tryDepths = [];
+  let insideCatch = false;
+  let catchDepth = 0;
+  let catchStartLine = 0;
+  let catchHasBody = false;
+  let catchLogged = false;
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment7(rawLine).trim();
+    const where = fileLabel + ":" + (i + 1);
+    const opens = (line.match(/{/g) || []).length;
+    const closes = (line.match(/}/g) || []).length;
+    if (insideCatch) {
+      if (line.length > 0 && line !== "{" && line !== "}") {
+        catchHasBody = true;
+      }
+      if (PHP_LOG_PATTERN.test(line)) {
+        catchLogged = true;
+      }
+    }
+    if (PHP_CATCH_PATTERN.test(line)) {
+      insideCatch = true;
+      catchDepth = depth + opens;
+      catchStartLine = i;
+      catchHasBody = false;
+      catchLogged = false;
+    }
+    if (PHP_TRY_PATTERN.test(line)) {
+      tryDepths.push(depth + opens);
+    }
+    const insideTry = tryDepths.length > 0;
+    if (!insideTry) {
+      checkRiskyPatterns(line, where, findings, [PHP_DB_PATTERNS, PHP_TX_PATTERNS]);
+    }
+    depth += opens - closes;
+    if (tryDepths.length > 0 && depth < tryDepths[tryDepths.length - 1]) {
+      tryDepths.pop();
+    }
+    if (insideCatch && depth < catchDepth) {
+      if (!catchHasBody) {
+        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch esta vacio; maneja o registra el error");
+      } else if (!catchLogged) {
+        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch no registra el error en bitacora; agrega un error_log/log::error");
+      }
+      insideCatch = false;
+    }
+  });
+}
+function analyzeExceptionHandling(lines, fileLabel, findings) {
+  if (fileLabel.endsWith(".cs")) {
+    analyzeCSharpExceptionHandling(lines, fileLabel, findings);
+  } else if (fileLabel.endsWith(".ts") || fileLabel.endsWith(".tsx") || fileLabel.endsWith(".js") || fileLabel.endsWith("jsx")) {
+    analyzeJsTsExceptionHandling(lines, fileLabel, findings);
+  } else if (fileLabel.endsWith(".php")) {
+    analyzePhpExceptionHandling(lines, fileLabel, findings);
+  }
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviewer", async () => {
@@ -1053,6 +1381,7 @@ function registerCodeReviewerCommand(context) {
       analyzeVarUsage(lines, fileLabel, findings);
       analyzeObjectUsage(lines, fileLabel, findings);
       analyzeStringInterpolation(lines, fileLabel, findings);
+      analyzeExceptionHandling(lines, fileLabel, findings);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {
