@@ -1355,6 +1355,165 @@ function analyzeExceptionHandling(lines, fileLabel, findings) {
   }
 }
 
+// src/interfaceContractAnalyzer.ts
+function stripLineComment8(rawLine) {
+  const commentIndex = rawLine.indexOf("//");
+  return commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
+}
+function splitTypeList(raw) {
+  if (!raw) {
+    return [];
+  }
+  return raw.split(",").map((token) => token.trim().split("<")[0].trim()).filter((token) => token.length > 0);
+}
+var INTERFACE_PATTERN = /^(?:public|internal)?\s*interface\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*([\w,\s<>]+))?/;
+var ABSTRACT_CLASS_PATTERN = /^(?:public|internal)?\s*abstract\s+(?:partial\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*([\w,\s<>]+))?/;
+var ABSTRACT_METHOD_PATTERN = /^(?:abstract\s+)?[\w<>[\],.?]+\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^()]*\)\s*;/;
+var CLASS_PATTERN2 = /^(?:(?:public|private|protected|internal|static|sealed|partial)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*([\w,\s<>]+))?/;
+var CLASS_IS_ABSTRACT_PATTERN = /^\s*(?:public|internal)?\s*abstract\s+class\b/;
+var CSHARP_MODIFIERS2 = "(?:public|private|protected|internal|static|virtual|override|async|abstract|sealed|new|extern)";
+var DEFINED_METHOD_PATTERN = new RegExp(`^(?:${CSHARP_MODIFIERS2}\\s+)+[\\w<>\\[\\],.?]+\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\([^()]*\\)\\s*(?:\\{|=>)`);
+function collectCSharpContracts(lines, fileLabel, registry) {
+  let insideContract = false;
+  let currentMethod = /* @__PURE__ */ new Set();
+  let currentName = "";
+  let currentParents = [];
+  let currentKind = "interface";
+  let depth = 0;
+  const closeCurrentContract = () => {
+    if (currentName) {
+      registry.set(currentName, { kind: currentKind, methods: currentMethod, parents: currentParents, fileLabel });
+    }
+    insideContract = false;
+    currentMethod = /* @__PURE__ */ new Set();
+    currentName = "";
+    currentParents = [];
+  };
+  lines.forEach((rawLine) => {
+    const line = stripLineComment8(rawLine).trim();
+    const interfaceMatch = line.match(INTERFACE_PATTERN);
+    const abstractClassMatch = !interfaceMatch ? line.match(ABSTRACT_CLASS_PATTERN) : null;
+    if (interfaceMatch || abstractClassMatch) {
+      if (insideContract) {
+        closeCurrentContract();
+      }
+      const match = interfaceMatch ?? abstractClassMatch;
+      insideContract = true;
+      depth = 0;
+      currentKind = interfaceMatch ? "interface" : "abstract-class";
+      currentName = match[1];
+      currentParents = splitTypeList(match[2]);
+      return;
+    }
+    if (!insideContract) {
+      return;
+    }
+    const methodMatch = line.match(ABSTRACT_METHOD_PATTERN);
+    if (methodMatch) {
+      currentMethod.add(methodMatch[1]);
+    }
+    if (line.includes("{")) {
+      depth++;
+    }
+    if (line.includes("}")) {
+      depth--;
+      if (depth <= 0) {
+        closeCurrentContract();
+      }
+    }
+  });
+  if (insideContract) {
+    closeCurrentContract();
+  }
+}
+function resolveRequireMethods(contractName, registry, visited = /* @__PURE__ */ new Set()) {
+  if (visited.has(contractName)) {
+    return /* @__PURE__ */ new Set();
+  }
+  visited.add(contractName);
+  const contract = registry.get(contractName);
+  if (!contract) {
+    return /* @__PURE__ */ new Set();
+  }
+  const result = new Set(contract.methods);
+  for (const parent of contract.parents) {
+    for (const inherited of resolveRequireMethods(parent, registry, visited)) {
+      result.add(inherited);
+    }
+  }
+  return result;
+}
+function analyzeCSharpContractImplementations(lines, fileLabel, registry, findings) {
+  let insideClass = false;
+  let isAbstractClass = false;
+  let className = "";
+  let classStartLine = 0;
+  let requiredContracts = [];
+  let definedMethods = /* @__PURE__ */ new Set();
+  let depth = 0;
+  const closeCurrentClass = () => {
+    if (!isAbstractClass) {
+      for (const ContractName of requiredContracts) {
+        const required = resolveRequireMethods(ContractName, registry);
+        for (const methodName of required) {
+          if (!definedMethods.has(methodName)) {
+            findings.push(
+              fileLabel + ":" + (classStartLine + 1) + ' - La clase "' + className + '" implementa "' + ContractName + '" pero no define el metodo "' + methodName + '"'
+            );
+          }
+        }
+      }
+    }
+    insideClass = false;
+    requiredContracts = [];
+    definedMethods = /* @__PURE__ */ new Set();
+  };
+  lines.forEach((rawLine, i) => {
+    const line = stripLineComment8(rawLine).trim();
+    const classMatch = line.match(CLASS_PATTERN2);
+    if (classMatch) {
+      insideClass = true;
+      depth = 0;
+      classStartLine = i;
+      className = classMatch[1];
+      isAbstractClass = CLASS_IS_ABSTRACT_PATTERN.test(line);
+      requiredContracts = splitTypeList(classMatch[2]).filter((name) => registry.has(name));
+    }
+    if (!insideClass) {
+      return;
+    }
+    const methodMatch = line.match(DEFINED_METHOD_PATTERN);
+    if (methodMatch) {
+      definedMethods.add(methodMatch[1]);
+    }
+    if (line.includes("{")) {
+      depth++;
+    }
+    if (line.includes("}")) {
+      depth--;
+      if (depth <= 0) {
+        closeCurrentClass();
+      }
+    }
+  });
+  if (insideClass) {
+    closeCurrentClass();
+  }
+}
+function analyzeInterfaceContracts(fileLines, findings) {
+  const registry = /* @__PURE__ */ new Map();
+  for (const [fileLabel, lines] of fileLines) {
+    if (fileLabel.endsWith(".cs")) {
+      collectCSharpContracts(lines, fileLabel, registry);
+    }
+  }
+  for (const [fileLabel, lines] of fileLines) {
+    if (fileLabel.endsWith(".cs")) {
+      analyzeCSharpContractImplementations(lines, fileLabel, registry, findings);
+    }
+  }
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviewer", async () => {
@@ -1367,10 +1526,12 @@ function registerCodeReviewerCommand(context) {
     const excludePattern = "{**/node_modules/**,**/dist/**,**/out/**,**/.git/**,**/build/**}";
     const codeFiles = await vscode.workspace.findFiles("**/*.{ts,tsx,js,jsx,php,cs}", excludePattern);
     const envFiles = await vscode.workspace.findFiles("**/.env*", excludePattern);
+    const fileLines = /* @__PURE__ */ new Map();
     for (const uri of codeFiles) {
       const fileLabel = vscode.workspace.asRelativePath(uri);
       const bytes = await vscode.workspace.fs.readFile(uri);
       const lines = Buffer.from(bytes).toString("utf8").split("\n");
+      fileLines.set(fileLabel, lines);
       analyzeIndentation(lines, fileLabel, findings);
       analyzeIfStatements(lines, fileLabel, findings);
       analyzeParameters(lines, fileLabel, findings);
@@ -1388,6 +1549,7 @@ function registerCodeReviewerCommand(context) {
         analyzeNaming(lines, languageId, fileLabel, findings);
       }
     }
+    analyzeInterfaceContracts(fileLines, findings);
     for (const uri of envFiles) {
       const fileLabel = vscode.workspace.asRelativePath(uri);
       const bytes = await vscode.workspace.fs.readFile(uri);

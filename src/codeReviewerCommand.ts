@@ -13,6 +13,7 @@ import { analyzeVarUsage } from './varAnalyze';
 import { analyzeObjectUsage } from './objectAnalyzer';
 import { analyzeStringInterpolation } from './stringInterpolationAnalyzer';
 import { analyzeExceptionHandling } from './exceptionHandlingAnalyzer';
+import { analyzeInterfaceContracts } from './interfaceContractAnalyzer';
 
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
 export function registerCodeReviewerCommand(context: vscode.ExtensionContext): void {
@@ -34,6 +35,9 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		const codeFiles = await vscode.workspace.findFiles('**/*.{ts,tsx,js,jsx,php,cs}', excludePattern);
 		const envFiles = await vscode.workspace.findFiles('**/.env*', excludePattern);
 
+		// Se guardan las lineas de cada archivo para los analisis que necesitan ver todo el proyecto a la vez
+		const fileLines = new Map<string, string[]>();
+
 		// --------------------------------------------------------------------------------------
 		// ---- IDENTACION Y NOMBRES DE CLASES, FUNCIONES, METODOS, VARIABLES Y CONSTANTES ------
 		// ---- PARAMETROS ----------------------------------------------------------------------
@@ -42,6 +46,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const fileLabel = vscode.workspace.asRelativePath(uri); // Ruta relativa del archivo, para identificarlo en el reporte
 			const bytes = await vscode.workspace.fs.readFile(uri); // Se lee el contenido del archivo
 			const lines = Buffer.from(bytes).toString('utf8').split('\n'); // Se divide el texto del documento en lineas
+			fileLines.set(fileLabel, lines);
 
 			analyzeIndentation(lines, fileLabel, findings);
 			analyzeIfStatements(lines, fileLabel, findings);
@@ -63,7 +68,13 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		}
 
 		// --------------------------------------------------------------------------------------
-		// ---- VARIABLES DE ENTORNO ------------------------------------------------------------
+		// ---- CONTRATOS: INTERFACES Y CLASES ABSTRACTAS ---------------------------------------
+		// Se ejecuta despues del ciclo porque una interfaz puede estar en un archivo y su implementacion en otro
+
+		analyzeInterfaceContracts(fileLines, findings);
+
+		// --------------------------------------------------------------------------------------
+		// ---- VARIABLES DE ENTORNO------------------------------------------------------------
 
 		for (const uri of envFiles) {
 			const fileLabel = vscode.workspace.asRelativePath(uri);
