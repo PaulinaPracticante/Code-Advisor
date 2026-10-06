@@ -1514,6 +1514,37 @@ function analyzeInterfaceContracts(fileLines, findings) {
   }
 }
 
+// src/layeredStructureAnalyzer.ts
+var LAYERS = [
+  { name: "controladores", folders: ["controllers", "controladores"] },
+  { name: "Interface", folders: ["interfaces"] },
+  { name: "Servicios", folders: ["services", "servicios"] },
+  { name: "Utils", folders: ["utils", "helpers", "utilidades"] }
+];
+var REPOSITORY_LAYER = { name: "Repositorios", folders: ["repositories", "repositorios"] };
+var DATABASE_USAGE_PATTERN = /\b(?:DbContext|SqlConnection|mongoose|PrismaClient|typeorm|sequelize|mysqli_\w+|new\s+PDO)\b/;
+function layerExists(folderPaths, folders) {
+  return folderPaths.some((folderPath) => {
+    const segments = folderPath.replace(/\\/g, "/").toLowerCase().split("/");
+    return segments.some((segment) => folders.includes(segment));
+  });
+}
+function analyzeLayeredStructure(fileLines, folderPaths, findings) {
+  const usesDatabase = [...fileLines.values()].some(
+    (lines) => (
+      //recorre todas las lineas de todos los archivos 
+      lines.some((line) => DATABASE_USAGE_PATTERN.test(line))
+    )
+    //usa el regex para ver s en algun lado se usa una base de datos 
+  );
+  const requiredLayers = usesDatabase ? [...LAYERS, REPOSITORY_LAYER] : LAYERS;
+  for (const layer of requiredLayers) {
+    if (!layerExists(folderPaths, layer.folders)) {
+      findings.push('Estructura del proyecto - No se encontro en la capa "' + layer.name + '"');
+    }
+  }
+}
+
 // src/codeReviewerCommand.ts
 function registerCodeReviewerCommand(context) {
   const disposable = vscode.commands.registerCommand("codeadvisor.codeReviewer", async () => {
@@ -1549,12 +1580,31 @@ function registerCodeReviewerCommand(context) {
         analyzeNaming(lines, languageId, fileLabel, findings);
       }
     }
+    const excludedFolderNames = /* @__PURE__ */ new Set(["node_module", "dist", "out", ".git", "build"]);
+    const folderPaths = await collectFolderPaths(folder.uri, excludedFolderNames);
     analyzeInterfaceContracts(fileLines, findings);
+    analyzeLayeredStructure(fileLines, folderPaths, findings);
     for (const uri of envFiles) {
       const fileLabel = vscode.workspace.asRelativePath(uri);
       const bytes = await vscode.workspace.fs.readFile(uri);
       const lines = Buffer.from(bytes).toString("utf8").split("\n");
       analyzeEnvVariables(lines, fileLabel, findings);
+    }
+    async function collectFolderPaths(uri, excludedNames) {
+      const folderPaths2 = [];
+      const entries = await vscode.workspace.fs.readDirectory(uri);
+      for (const [name, type] of entries) {
+        if (excludedNames.has(name)) {
+          continue;
+        }
+        if (type === vscode.FileType.Directory) {
+          const childUri = vscode.Uri.joinPath(uri, name);
+          folderPaths2.push(vscode.workspace.asRelativePath(childUri));
+          const nested = await collectFolderPaths(childUri, excludedNames);
+          folderPaths2.push(...nested);
+        }
+      }
+      return folderPaths2;
     }
     const reportContent = findings.length > 0 ? findings.join("\n") : "No se encontraron hallazgos.";
     const reportUri = vscode.Uri.joinPath(folder.uri, "code-advisor-report.txt");

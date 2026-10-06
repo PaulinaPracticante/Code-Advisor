@@ -14,6 +14,7 @@ import { analyzeObjectUsage } from './objectAnalyzer';
 import { analyzeStringInterpolation } from './stringInterpolationAnalyzer';
 import { analyzeExceptionHandling } from './exceptionHandlingAnalyzer';
 import { analyzeInterfaceContracts } from './interfaceContractAnalyzer';
+import { analyzeLayeredStructure } from './layeredStructureAnalyzer';
 
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
 export function registerCodeReviewerCommand(context: vscode.ExtensionContext): void {
@@ -71,7 +72,11 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		// ---- CONTRATOS: INTERFACES Y CLASES ABSTRACTAS ---------------------------------------
 		// Se ejecuta despues del ciclo porque una interfaz puede estar en un archivo y su implementacion en otro
 
+		const excludedFolderNames = new Set (['node_module', 'dist', 'out', '.git', 'build']);
+		const folderPaths = await collectFolderPaths(folder.uri, excludedFolderNames);
+
 		analyzeInterfaceContracts(fileLines, findings);
+		analyzeLayeredStructure(fileLines, folderPaths, findings);
 
 		// --------------------------------------------------------------------------------------
 		// ---- VARIABLES DE ENTORNO------------------------------------------------------------
@@ -82,6 +87,27 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const lines = Buffer.from(bytes).toString('utf8').split('\n');
 
 			analyzeEnvVariables(lines, fileLabel, findings);
+		}
+
+		// ----------------------------------------------------------------------------------------
+		// ---- CARPETAS --------------------------------------------------------------------------
+		async function collectFolderPaths(uri: vscode.Uri, excludedNames: Set<string>): Promise<string[]> {
+			const folderPaths: string[] = [];
+			const entries = await vscode.workspace.fs.readDirectory(uri);
+
+			for (const [name, type] of entries) {
+				if (excludedNames.has(name)) {
+					continue;
+				}
+
+				if (type === vscode.FileType.Directory) {
+					const childUri = vscode.Uri.joinPath(uri, name);
+					folderPaths.push(vscode.workspace.asRelativePath(childUri));
+					const nested = await collectFolderPaths(childUri, excludedNames);
+					folderPaths.push(...nested);
+				}
+			}
+			return folderPaths;
 		}
 
 		// --------------------------------------------------------------------------------------
