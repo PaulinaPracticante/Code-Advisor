@@ -58,8 +58,28 @@ function isTernaryContinuation(trimmedLine: string): boolean {
 	return /^\?(?!\.|\?)/.test(trimmedLine) || trimmedLine.startsWith(':');
 }
 
-// Revisa ternarios anidados, incluyendo los escritos en varias lineas. Junta la linea donde aparece el primer "?" con las
-// siguientes lineas de continuacion y cuenta el total de operadores ternarios en esa cadena; si hay 2 o mas se marca como anidado.
+//detecta si el texto es una sentencia LINQ: lambda ("=>") o query syntax ("from x in ...")
+const LINQ_LAMBDA_PATTERN = /=>/;
+const LINQ_QUERY_PATTERN = /^from\s+\w+\s+in\b/;
+
+// Divide el texto en "segmentos" independientes: cada lambda ("=>") o cada clausula de
+// query syntax (from/where/select/orderby/group/join/let) es su propio alcance. Un ternario
+// en un segmento no cuenta como anidado con el de otro segmento, porque viven en expresiones
+// distintas (ej. dos .Select() separados en la misma cadena LINQ).
+function splitIntoExpressionSegments(text: string): string[] {
+	if (LINQ_QUERY_PATTERN.test(text)) {
+		return text.split(/\b(?:from|where|select|orderby|grouo|join|let)\b/);
+	}
+	if (LINQ_LAMBDA_PATTERN.test(text)) {
+		return text.split('=>');
+	}
+	return [text];
+}
+
+// Revisa ternarios anidados, incluyendo los escritos en varias lineas. Junta la linea donde aparece
+// el primer "?" con las siguientes lineas de continuacion, pero en vez de sumar TODOS los "?" de la
+// cadena, cuenta por segmento independiente (separando por "=>" o por clausulas LINQ), para no marcar
+// como anidados ternarios que en realidad son independientes dentro de una sentencia LINQ.
 function checkNestedTernaries(lines: string[], fileLabel: string, findings: string[]): void {
 	let i = 0;
 	//Si la linea i no tiene ningun ? avanza una linea y sigue  
@@ -67,24 +87,28 @@ function checkNestedTernaries(lines: string[], fileLabel: string, findings: stri
 		const trimmed = stripLineComment(lines[i]).trim();
 		let totalTernaryCount = countTernaryOperators(trimmed);
 
-		if (totalTernaryCount === 0) {
+		if (countTernaryOperators(trimmed)) {
 			i++;
 			continue;
 		}
 
 		//si si tiene ? va juntando todas las lineas siguientes que sean con continuacion, sumando sus operadores ternarios a totalTernaryCount.
+		let chainText = trimmed;
 		let j = i + 1;
 		while (j < lines.length) {
 			const nextTrimmed = stripLineComment(lines[j]).trim();
 			if (!isTernaryContinuation(nextTrimmed)) {
 				break;
 			}
-			totalTernaryCount += countTernaryOperators(nextTrimmed);
+			chainText += ' ' + nextTrimmed;
 			j++;
 		}
 
+		const segments = splitIntoExpressionSegments(chainText);
+		const hasRealNesting = segments.some(segment => countTernaryOperators(segment) >= 2);
+
 		// si al final esa cadenas junta 2 o mas ?, es un ternario anidado, osea que es un hallazgo 
-		if (totalTernaryCount >= 2) {
+		if (hasRealNesting) {
 			findings.push(fileLabel + ':' + (i + 1) + ' - Se encontraron operadores ternarios anidados, evita anidar "?:"');
 		}
 
