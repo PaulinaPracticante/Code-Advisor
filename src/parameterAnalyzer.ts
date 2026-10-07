@@ -78,7 +78,7 @@ export function analyzeParameters(lines: string[], fileLabel: string, findings: 
         //si cruza varias lineas, va concatenando el restp de cada linea 
         if (closing.line !== i) {
             for (let j = i + 1; j < closing.line; j++) {
-                paramsText += ' ' + stripLineComment(line[j]);
+                paramsText += ' ' + stripLineComment(lines[j]);
             }
             paramsText += ' ' + stripLineComment(lines[closing.line]).slice(0, closing.col);
         }
