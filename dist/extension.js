@@ -336,25 +336,39 @@ function countTernaryOperators(trimmedLine) {
 function isTernaryContinuation(trimmedLine) {
   return /^\?(?!\.|\?)/.test(trimmedLine) || trimmedLine.startsWith(":");
 }
+var LINQ_LAMBDA_PATTERN = /=>/;
+var LINQ_QUERY_PATTERN = /^from\s+\w+\s+in\b/;
+function splitIntoExpressionSegments(text) {
+  if (LINQ_QUERY_PATTERN.test(text)) {
+    return text.split(/\b(?:from|where|select|orderby|grouo|join|let)\b/);
+  }
+  if (LINQ_LAMBDA_PATTERN.test(text)) {
+    return text.split("=>");
+  }
+  return [text];
+}
 function checkNestedTernaries(lines, fileLabel, findings) {
   let i = 0;
   while (i < lines.length) {
     const trimmed = stripLineComment(lines[i]).trim();
     let totalTernaryCount = countTernaryOperators(trimmed);
-    if (totalTernaryCount === 0) {
+    if (countTernaryOperators(trimmed)) {
       i++;
       continue;
     }
+    let chainText = trimmed;
     let j = i + 1;
     while (j < lines.length) {
       const nextTrimmed = stripLineComment(lines[j]).trim();
       if (!isTernaryContinuation(nextTrimmed)) {
         break;
       }
-      totalTernaryCount += countTernaryOperators(nextTrimmed);
+      chainText += " " + nextTrimmed;
       j++;
     }
-    if (totalTernaryCount >= 2) {
+    const segments = splitIntoExpressionSegments(chainText);
+    const hasRealNesting = segments.some((segment) => countTernaryOperators(segment) >= 2);
+    if (hasRealNesting) {
       findings.push(fileLabel + ":" + (i + 1) + ' - Se encontraron operadores ternarios anidados, evita anidar "?:"');
     }
     i = j;
@@ -442,7 +456,7 @@ function analyzeParameters(lines, fileLabel, findings) {
     let paramsText = closing.line === i ? line.slice(openIndex + 1, closing.col) : line.slice(openIndex + 1);
     if (closing.line !== i) {
       for (let j = i + 1; j < closing.line; j++) {
-        paramsText += " " + stripLineComment2(line[j]);
+        paramsText += " " + stripLineComment2(lines[j]);
       }
       paramsText += " " + stripLineComment2(lines[closing.line]).slice(0, closing.col);
     }
