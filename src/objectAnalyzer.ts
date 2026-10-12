@@ -15,8 +15,9 @@ const CS_OBJECT_RETURN_PATTERN = /^(?:(?:public|private|protected|internal|stati
 const CS_NEW_OBJECT_PATTERN = /\bnew\s+object\s*\(\s*\)/;
 const CS_EQUALS_OVERRIDE_PATTERN = /\bEquals\s*\(\s*object\s+\w+\s*\)/;
 
-function analyzeCSharpObjectUsage(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzeCSharpObjectUsage(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     lines.forEach((rawLine, i) => {
+        if (!changedLines.has(i + 1)) { return; }
         const line = stripLineComment(rawLine).trim(); //quita comentarios
         const where = fileLabel + ':' + (i + 1);
         //si la linea es un override se ignora por completo 
@@ -50,8 +51,9 @@ function analyzeCSharpObjectUsage(lines: string[], fileLabel: string, findings: 
 const TS_OBJECT_TYPE_PATTERN = /:\s*(object|Object)\b(?!\s*[.\w])/;
 const TS_NEW_OBJECT_PATTERN = /\bnew\s+Object\s*\(\s*\)/;
 
-function analyzeTsObjectUsage(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzeTsObjectUsage(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     lines.forEach((rawLine, i) => {
+        if (!changedLines.has(i + 1)) { return; }
         const line = stripLineComment(rawLine).trim();//elimina comentarios 
         const where = fileLabel + ':' + (i + 1);
 
@@ -71,8 +73,9 @@ function analyzeTsObjectUsage(lines: string[], fileLabel: string, findings: stri
 const JS_NEW_OBJECT_PATTERN = /\bnew\s+Object\s*\(\s*\)/;
 const JSDOC_OBJECT_PATTERN = /@(?:param|returns?|type)\s*\{\s*Object\s*\}/;
 
-function analyzeJsObjectUsage(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzeJsObjectUsage(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     lines.forEach((rawLine, i) => {
+        if (!changedLines.has(i + 1)) { return; }
         const line = rawLine.trim(); //elimina comentarios 
         const where = fileLabel + ':' + (i + 1);
 
@@ -88,12 +91,12 @@ function analyzeJsObjectUsage(lines: string[], fileLabel: string, findings: stri
 }
 
 // Funcion principal 
-export function analyzeObjectUsage(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeObjectUsage(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     if (fileLabel.endsWith('.cs')) {
-        analyzeCSharpObjectUsage(lines, fileLabel, findings);
+        analyzeCSharpObjectUsage(lines, fileLabel, findings, changedLines);
     } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.tsx')) {
-        analyzeTsObjectUsage(lines, fileLabel, findings); 
+        analyzeTsObjectUsage(lines, fileLabel, findings, changedLines); 
     } else if (fileLabel.endsWith('.js') || fileLabel.endsWith('.jsx')) {
-        analyzeJsObjectUsage(lines, fileLabel, findings);
+        analyzeJsObjectUsage(lines, fileLabel, findings, changedLines);
     }
 }

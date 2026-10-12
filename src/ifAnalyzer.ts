@@ -2,6 +2,7 @@
 // ---- VERIFICACION DE "IF": LLAVES OBLIGATORIAS Y TERNARIOS SIN ANIDAR ----------
 // -------------------------------------------------------------------------------
 
+import { rangeIntersectChangedLines } from "./diffUtils";
 //Corta cualquier comentario de la linea, igual que en los demas analyzers
 function stripLineComment(rawLine: string): string {
 	const commentIndex = rawLine.indexOf('//');
@@ -80,7 +81,7 @@ function splitIntoExpressionSegments(text: string): string[] {
 // el primer "?" con las siguientes lineas de continuacion, pero en vez de sumar TODOS los "?" de la
 // cadena, cuenta por segmento independiente (separando por "=>" o por clausulas LINQ), para no marcar
 // como anidados ternarios que en realidad son independientes dentro de una sentencia LINQ.
-function checkNestedTernaries(lines: string[], fileLabel: string, findings: string[]): void {
+function checkNestedTernaries(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
 	let i = 0;
 	//Si la linea i no tiene ningun ? avanza una linea y sigue  
 	while (i < lines.length) {
@@ -108,7 +109,7 @@ function checkNestedTernaries(lines: string[], fileLabel: string, findings: stri
 		const hasRealNesting = segments.some(segment => countTernaryOperators(segment) >= 2);
 
 		// si al final esa cadenas junta 2 o mas ?, es un ternario anidado, osea que es un hallazgo 
-		if (hasRealNesting) {
+		if (hasRealNesting && changedLines.has(i + 1)) {
 			findings.push(fileLabel + ':' + (i + 1) + ' - Se encontraron operadores ternarios anidados, evita anidar "?:"');
 		}
 
@@ -118,8 +119,9 @@ function checkNestedTernaries(lines: string[], fileLabel: string, findings: stri
 
 // Revisa que los if/else if/else de una sola instruccion usen llaves, y que no haya
 // operadores ternarios anidados.
-export function analyzeIfStatements(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeIfStatements(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
 	lines.forEach((rawLine, i) => {
+		if (!changedLines.has(i + 1)) { return; }
 		const line = stripLineComment(rawLine);
 		const trimmed = line.trim();
 
@@ -145,5 +147,5 @@ export function analyzeIfStatements(lines: string[], fileLabel: string, findings
 		}
 	});
 
-	checkNestedTernaries(lines, fileLabel, findings);
+	checkNestedTernaries(lines, fileLabel, findings, changedLines);
 }

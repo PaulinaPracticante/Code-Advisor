@@ -2,6 +2,8 @@
 // ---- VERIFICACION DE USO DE LINQ: LOOPS MANUALES QUE PUEDEN SIMPLIFICARSE
 // ----------------------------------------------------------------------------------------
 
+import { rangeIntersectChangedLines } from "./diffUtils";
+
 //"foreach (var item in coleccion)"
 //captura el nombre de la variable de iteracion y el nombre de la coleccion 
 const FOREACH_PATTERN = /^foreach\s*\(\s*(?:var|[\w<>[\],.]+)\s+([A-Za-z_]\w*)\s+in\s+([A-Za-z_][\w.]*)\s*\)/;
@@ -26,7 +28,7 @@ const ACCUMULATE_PATTERN = /^([A-Za-z_]\w*)\s*\+=\s*(.+?)\s*;/;
 const ASSING_PATTERN = /^([A-Za-z_]\w*)\s*=\s*(.+?)\s*;/;
 const BREAK_PATTERN = /^break\s*;/;
 
-export function analyzeLinqUsage(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeLinqUsage(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     if (!fileLabel.endsWith('.cs')) {
         return;
     }
@@ -89,37 +91,39 @@ export function analyzeLinqUsage(lines: string[], fileLabel: string, findings: s
                 depth--;
                 if (depth <= 0) { // cuando vuelva a 0 o menos significa que el loop termino
                     // al cerrar el loop, decide que sugerencia dar evaluando las banderas 
-                    if (sawIf && sawAdd) {
-                        findings.push(
-                            fileLabel + ':' + (loopStartLine + 1) +
-                            ' - reemplaza el loop manual por "' + sourceCollection +
-                            '.Where(' + loopVar + ' => condicion).Select(' + loopVar +
-                            ' => valor).ToList()" para mejorar la legibilidad'
-                        );
-                    } else if (sawAdd) {
-                        findings.push(
-                            fileLabel + ':' + (loopStartLine + 1) +
-                            ' - reemplaza la transformacion manual por "' + sourceCollection +
-                            '.Select(' + loopVar + ' => valor).ToList()" en lugar de usar Add() dentro del loop'
-                        );
-                    } else if (sawIf && sawIncrement) {
-                        findings.push(
-                            fileLabel + ':' + (loopStartLine + 1) +
-                            ' - reemplaza el conteo manual por "' + sourceCollection +
-                            '.Count(' + loopVar + ' => condicion)"'
-                        );
-                    } else if (sawSum) {
-                        findings.push(
-                            fileLabel + ':' + (loopStartLine + 1) +
-                            ' - reemplaza la acumulacion manual por "' + sourceCollection +
-                            '.Sum(' + loopVar + ' => valor)" en lugar de sumar dentro de un loop'
-                        );
-                    } else if (sawIf && sawAssignThenBreak) {
-                        findings.push(
-                            fileLabel + ':' + (loopStartLine + 1) +
-                            ' - reemplaza la busqueda manual por "' + sourceCollection +
-                            '.FirstOrDefault(' + loopVar + ' => condicion)"'
-                        );
+                    if (rangeIntersectChangedLines(changedLines, loopStartLine + 1, i + 1)) {
+                        if (sawIf && sawAdd) {
+                            findings.push(
+                                fileLabel + ':' + (loopStartLine + 1) +
+                                ' - reemplaza el loop manual por "' + sourceCollection +
+                                '.Where(' + loopVar + ' => condicion).Select(' + loopVar +
+                                ' => valor).ToList()" para mejorar la legibilidad'
+                            );
+                        } else if (sawAdd) {
+                            findings.push(
+                                fileLabel + ':' + (loopStartLine + 1) +
+                                ' - reemplaza la transformacion manual por "' + sourceCollection +
+                                '.Select(' + loopVar + ' => valor).ToList()" en lugar de usar Add() dentro del loop'
+                            );
+                        } else if (sawIf && sawIncrement) {
+                            findings.push(
+                                fileLabel + ':' + (loopStartLine + 1) +
+                                ' - reemplaza el conteo manual por "' + sourceCollection +
+                                '.Count(' + loopVar + ' => condicion)"'
+                            );
+                        } else if (sawSum) {
+                            findings.push(
+                                fileLabel + ':' + (loopStartLine + 1) +
+                                ' - reemplaza la acumulacion manual por "' + sourceCollection +
+                                '.Sum(' + loopVar + ' => valor)" en lugar de sumar dentro de un loop'
+                            );
+                        } else if (sawIf && sawAssignThenBreak) {
+                            findings.push(
+                                fileLabel + ':' + (loopStartLine + 1) +
+                                ' - reemplaza la busqueda manual por "' + sourceCollection +
+                                '.FirstOrDefault(' + loopVar + ' => condicion)"'
+                            );
+                        }
                     }
                     insideLoop = false; //al terminar reinicia la bandera para poder detecta el siguiente loop 
                 }

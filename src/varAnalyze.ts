@@ -2,6 +2,8 @@
 // ---- VERIFICACION DE USO DE "var" -------------------------------------------------------
 // -----------------------------------------------------------------------------------------
 
+import { rangeIntersectChangedLines } from "./diffUtils";
+
 // Matchea lineas tipo var id = 1023;
 const VAR_DECL_PATTERN = /^var\s+([A-Za-z_]\w*)\s*=\s*(.+?)\s*;\s*$/;
 
@@ -21,7 +23,7 @@ const METHOD_PATTERN = /^(?:public|private|protected|internal|static)(?:\s+(?:pu
 const RETURN_NEW_PATTERN = /^return\s+new\s+([A-Za-z_]\w*)\s*[\(\{]/;
 
 //funcion principal para el analisis 
-export function analyzeVarUsage(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeVarUsage(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     //ignora el archivo si no es de c#
     if (!fileLabel.endsWith('cs')) {
         return;
@@ -71,7 +73,7 @@ export function analyzeVarUsage(lines: string[], fileLabel: string, findings: st
             //si el depth esta en 0
             if (bodyStarted && depth <= 0) {
                 //si el tamaño del returnedTypes es mayor de 1, hay hallazgo
-                if (isAsyncMethod && returnedTypes.size > 1) {
+                if (isAsyncMethod && returnedTypes.size > 1 && rangeIntersectChangedLines(changedLines, methodStartLine + 1, i + 1)) {
                     findings.push(
                         fileLabel + ':' + (methodStartLine + 1) +
                         ' - este metodo async retorna distintos tipos concretos (' +
@@ -111,7 +113,7 @@ export function analyzeVarUsage(lines: string[], fileLabel: string, findings: st
         //busca el match con EXPLICIT_DECL_PATTERN
         const explicitMatch = codeLine.match(EXPLICIT_DECL_PATTERN);
         //se captura cualquier palabra como tipo 
-        if (explicitMatch) {
+        if (explicitMatch && changedLines.has(i + 1)) {
             const [, declaredType, varName, rhs] = explicitMatch;
             //revisa si matchearia una linea con var 
             if (declaredType === 'var') {

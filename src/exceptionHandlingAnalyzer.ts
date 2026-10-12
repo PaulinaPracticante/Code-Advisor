@@ -2,6 +2,8 @@
 // ---- VERIFICACION DE MANEJO DE EXCEPCIONES (try-catch, BD, transacciones, hilos) ------
 // ---------------------------------------------------------------------------------------
 
+import { rangeIntersectChangedLines } from "./diffUtils";
+
 //funcion que corta los comentarios, lo que venga despues de //
 function stripLineComment(rawLine: string): string {
     const commentIndex = rawLine.indexOf('//');
@@ -51,7 +53,7 @@ const CS_THREAD_PATTERNS: [RegExp, string][] = [
 ];
 
 //funcion para el analisis de c#
-function analyzeCSharpExceptionHandling(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzeCSharpExceptionHandling(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     let depth = 0; //contador de profundidad de las llaves acumulado 
     const tryDepths: number[] = []; //array con la que se abrio cada try activo, si est vacia no estamos dentro de ningun try 
 
@@ -91,7 +93,7 @@ function analyzeCSharpExceptionHandling(lines: string[], fileLabel: string, find
 
         const insideTry = tryDepths.length > 0;
         //si no estamos detro de ningun try se corre checkRiskyPatterns y contra las tablas de DB, transacciones e hilos 
-        if (!insideTry) {
+        if (!insideTry && changedLines.has(i + 1)) {
             checkRiskyPatterns(line, where, findings, [CS_DB_PATTERNS, CS_TX_PATTERNS, CS_THREAD_PATTERNS]);
         }
 
@@ -106,11 +108,13 @@ function analyzeCSharpExceptionHandling(lines: string[], fileLabel: string, find
         //si estabamos dentro de un catch y depth ya bajo por debajo del catchDepth, el catch se cerro 
         if (insideCatch && depth < catchDepth) {
             // si nunca tuvo contenido, el catch esta vacio
-            if (!catchHasBody) {
-                findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch esta vacio; maneja o registra la excepcion');
-            // si tuvo contenido pero nunca vimos logging, no registra en bitacora
-            } else if (!catchLogged) {
-                findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch no registra el error en bitacora; agrega un logger.Error/_logger.LogError');
+            if (rangeIntersectChangedLines(changedLines, catchStartLine + 1, i + 1)) {
+                if (!catchHasBody) {
+                    findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch esta vacio; maneja o registra la excepcion');
+                // si tuvo contenido pero nunca vimos logging, no registra en bitacora
+                } else if (!catchLogged) {
+                    findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch no registra el error en bitacora; agrega un logger.Error/_logger.LogError');
+                }
             }
             //si se logueo y no se reporta nada, se resetea el insideCatch
             insideCatch = false;
@@ -144,7 +148,7 @@ const JS_THREAD_PATTERNS: [RegExp, string][] = [
 ];
 
 //funcion para el analisis de JavaScipt y TypeScript 
-function analyzeJsTsExceptionHandling(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzeJsTsExceptionHandling(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     let depth = 0; //contador de profundidad de las llaves acumulado
     const tryDepths: number[] = []; //array con la que se abrio cada try activo, si est vacia no estamos dentro de ningun try 
 
@@ -184,7 +188,7 @@ function analyzeJsTsExceptionHandling(lines: string[], fileLabel: string, findin
 
         const insideTry = tryDepths.length > 0;
         //si no estamos detro de ningun try se corre checkRiskyPatterns y contra las tablas de DB, transacciones e hilos 
-        if (!insideTry) {
+        if (!insideTry && changedLines.has(i + 1)) {
             checkRiskyPatterns(line, where, findings, [JS_DB_PATTERNS, JS_TX_PATTERNS, JS_THREAD_PATTERNS]);
         }
 
@@ -199,13 +203,15 @@ function analyzeJsTsExceptionHandling(lines: string[], fileLabel: string, findin
         //si estabamos dentro de un catch y depth ya bajo por debajo del catchDepth, el catch se cerro 
         if (insideCatch && depth < catchDepth) {
             // si el catch no tenia contenido, esta vacio 
-            if (!catchHasBody) {
-                findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch esta vacio; maneja o registra el error');
-            // si tuvo contenido pero nunca vimos logging, no registra en bitacora
-            } else if (!catchLogged) {
-                findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch no registra el error en bitacora; agrega un console.error/logger.error');
+            if (rangeIntersectChangedLines(changedLines, catchStartLine + 1, i + 1)) {
+                if (!catchHasBody) {
+                    findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch esta vacio; maneja o registra el error');
+                // si tuvo contenido pero nunca vimos logging, no registra en bitacora
+                } else if (!catchLogged) {
+                    findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch no registra el error en bitacora; agrega un console.error/logger.error');
+                }
+                insideCatch = false; //si se logueo y no se reporta nada, se resetea el insideCatch
             }
-            insideCatch = false; //si se logueo y no se reporta nada, se resetea el insideCatch
         }
     });
 }
@@ -229,7 +235,7 @@ const PHP_TX_PATTERNS: [RegExp, string][] = [
 ];
 
 //funcion para el analisis de php
-function analyzePhpExceptionHandling(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzePhpExceptionHandling(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     let depth = 0; //contador de profundidad de las llaves acumulado
     const tryDepths: number[] = []; //array con la que se abrio cada try activo, si est vacia no estamos dentro de ningun try
 
@@ -269,7 +275,7 @@ function analyzePhpExceptionHandling(lines: string[], fileLabel: string, finding
 
         const insideTry = tryDepths.length > 0;
         //si no estamos detro de ningun try se corre checkRiskyPatterns y contra las tablas de DB y transacciones
-        if (!insideTry) {
+        if (!insideTry && changedLines.has(i + 1)) {
             checkRiskyPatterns(line, where, findings, [PHP_DB_PATTERNS, PHP_TX_PATTERNS]);
         }
 
@@ -282,12 +288,14 @@ function analyzePhpExceptionHandling(lines: string[], fileLabel: string, finding
 
         //si estabamos dentro de un catch y depth ya bajo por debajo del catchDepth, el catch se cerro 
         if (insideCatch && depth < catchDepth) {
-            // si el catch no tiene contenido, esta vacio 
-            if (!catchHasBody) {
-                findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch esta vacio; maneja o registra el error');
-            // si tuvo contenido pero nunca vimos logging, no registra en bitacora
-            } else if (!catchLogged) {
-                findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch no registra el error en bitacora; agrega un error_log/log::error');
+            if (rangeIntersectChangedLines(changedLines, catchStartLine + 1, i + 1)) {
+                // si el catch no tiene contenido, esta vacio 
+                if (!catchHasBody) {
+                    findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch esta vacio; maneja o registra el error');
+                // si tuvo contenido pero nunca vimos logging, no registra en bitacora
+                } else if (!catchLogged) {
+                    findings.push(fileLabel + ':' + (catchStartLine + 1) + ' - el catch no registra el error en bitacora; agrega un error_log/log::error');
+                }
             }
             insideCatch = false; //si se logueo y no se reporta nada, se resetea el insideCatch
         }
@@ -295,12 +303,12 @@ function analyzePhpExceptionHandling(lines: string[], fileLabel: string, finding
 }
 
 // funcion principal 
-export function analyzeExceptionHandling(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeExceptionHandling(lines: string[], fileLabel: string, findings: string[], changedLine: Set<number>): void {
     if (fileLabel.endsWith('.cs')) {
-        analyzeCSharpExceptionHandling(lines, fileLabel, findings);
+        analyzeCSharpExceptionHandling(lines, fileLabel, findings, changedLine);
     } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.tsx') || fileLabel.endsWith('.js') || fileLabel.endsWith('jsx')) {
-        analyzeJsTsExceptionHandling(lines, fileLabel, findings);
+        analyzeJsTsExceptionHandling(lines, fileLabel, findings, changedLine);
     } else if (fileLabel.endsWith('.php')) {
-        analyzePhpExceptionHandling(lines, fileLabel, findings);
+        analyzePhpExceptionHandling(lines, fileLabel, findings, changedLine);
     }
 }
