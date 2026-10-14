@@ -18,9 +18,10 @@ const CS_CONCAT_PATTERN = new RegExp(
 //descarta acumulacion tipo "total += ..." o "total = total + ..."
 const CS_SELF_CONCAT_PATTERN = /^([A-Za-z_]\w*)\s*(\+=|=\s*\1\s*\+)/;
 
-function analyzeCSharpConcat(lines: string[], fileLabel: string, findings:  string[]): void {
+function analyzeCSharpConcat(lines: string[], fileLabel: string, findings:  string[], changedLines: Set<number>): void {
     //recorre linea por linea 
     lines.forEach((rawLine, i) => {
+        if (!changedLines.has(i + 1)) { return; }
         const line = stripLineComment(rawLine).trim();
         const where = fileLabel + ':' + (i + 1);
 
@@ -40,9 +41,10 @@ const JS_CONCAT_PATTERN = new RegExp(
 //descarta acumulacion tipo "total += ..." o "total = total + ..."
 const JS_SELF_CONCAT_PATTERN = /^([A-Za-z_$][\w$]*)\s*(\+=|=\s*\1\s*\+)/;
 
-function analyzeJsTsConcat(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzeJsTsConcat(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     // recorre linea por linea 
     lines.forEach((rawLine, i) => {
+        if (!changedLines.has(i + 1)) { return; }
         const line = stripLineComment(rawLine).trim();
         const where = fileLabel + ':' + (i + 1);
 
@@ -62,9 +64,10 @@ const PHP_CONCAT_PATTERN = new RegExp(
 //descarta acumulacion tipo "total += ..." o "total = total + ..."
 const PHP_SELF_CONCAT_PATTERN = /^(\$[A-Za-z_]\w*)\s*(\.=|=\s*\1\s*\.)/;
 
-function analyzePhpConcat(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzePhpConcat(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     //recorre linea por linea 
     lines.forEach((rawLine, i) => {
+        if (!changedLines.has(i + 1)) { return; }
         const line = stripLineComment(rawLine).trim();
         const where = fileLabel + ':' + (i + 1);
 
@@ -77,12 +80,12 @@ function analyzePhpConcat(lines: string[], fileLabel: string, findings: string[]
 }
 
 // funcion prinicipal 
-export function analyzeStringInterpolation(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeStringInterpolation(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     if (fileLabel.endsWith('.cs')) {
-        analyzeCSharpConcat(lines, fileLabel, findings);
+        analyzeCSharpConcat(lines, fileLabel, findings, changedLines);
     } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.tsx') || fileLabel.endsWith('.js') || fileLabel.endsWith('jsx')) {
-        analyzeJsTsConcat(lines, fileLabel, findings);
+        analyzeJsTsConcat(lines, fileLabel, findings, changedLines);
     } else if (fileLabel.endsWith('.php')) {
-        analyzePhpConcat(lines, fileLabel, findings);
+        analyzePhpConcat(lines, fileLabel, findings, changedLines);
     }
 }

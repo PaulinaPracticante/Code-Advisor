@@ -76,7 +76,7 @@ const EXTENSION_TO_CONFIG: Record<string, RequestModelConfig> = {
 };
 
 // Funcion principal
-export function analyzeRequestModels(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeRequestModels(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     const extension = fileLabel.split('.').pop() ?? ''; //determina la extension del archivo 
     const config = EXTENSION_TO_CONFIG[extension]; //determina la configuracion del archivo 
     if (!config) {
@@ -114,6 +114,10 @@ export function analyzeRequestModels(lines: string[], fileLabel: string, finding
 
         //si la linea matchea con missingDefaultPattern agrega el hallazgo a findings 
         if (config.missingDefaultPattern.test(line)) {
+            findings.push(fileLabel + ':' + (i + 1) + ' - La propiedad debe inicializar con un valor por default (ej. 0, "", string.Empty)');
+        }
+
+        if (config.missingDefaultPattern.test(line) && changedLines.has(i + 1)) {
             findings.push(fileLabel + ':' + (i + 1) + ' - La propiedad debe inicializar con un valor por default (ej. 0, "", string.Empty)');
         }
     });
