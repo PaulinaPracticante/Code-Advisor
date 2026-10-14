@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import { execFileSync } from 'child_process';
+import { getChangedLineNumbers } from './diffUtils';
 import { EXTENSION_TO_LANGUAGE_ID } from './namingConfig';
 import { analyzeNaming } from './namingAnalyzer';
 import { analyzeIndentation } from './indentationAnalyzer';
@@ -16,6 +18,27 @@ import { analyzeExceptionHandling } from './exceptionHandlingAnalyzer';
 import { analyzeInterfaceContracts } from './interfaceContractAnalyzer';
 import { analyzeLayeredStructure } from './layeredStructureAnalyzer';
 
+function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
+	try {
+
+		execFileSync('git', ['fetch', 'origin', baseBranch], { cwd: workspaceRoot, encoding: 'utf8' });
+		
+		const output = execFileSync(
+			'git',
+			['diff', '--name-only', '--diff-filter=ACMR', `origin/${baseBranch}...HEAD`],
+			{ cwd: workspaceRoot, encoding: 'utf8' }
+		);
+
+		return output
+			.split('\n')
+			.map(line => line.trim())
+			.filter(line => line.length > 0);
+
+	} catch (error) {
+		throw new Error(`No se pudo obtener el diff contra la rama "origin/${baseBranch}": ${(error as Error).message}`);
+	}
+}
+
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
 export function registerCodeReviewerCommand(context: vscode.ExtensionContext): void {
 	const disposable = vscode.commands.registerCommand('codeadvisor.codeReviewer', async () => {
@@ -32,9 +55,16 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		// Se ignoran las carpetas de dependencias y de salida para no revisar codigo generado/de terceros
 		const excludePattern = '{**/node_modules/**,**/dist/**,**/out/**,**/.git/**,**/build/**}';
 
-		// Se buscan los archivos de codigo soportados y los archivos .env del workspace
-		const codeFiles = await vscode.workspace.findFiles('**/*.{ts,tsx,js,jsx,php,cs}', excludePattern);
-		const envFiles = await vscode.workspace.findFiles('**/.env*', excludePattern);
+		const baseBranch = vscode.workspace.getConfiguration('codeadvisor').get<string>('baseBranch', 'main');
+		const changedPaths = getChangedFile(folder.uri.fsPath, baseBranch);
+
+		const codeFiles = changedPaths
+			.filter(path => /\.(ts|tsx|js|jsx|php|cs)$/.test(path))
+			.map(path => vscode.Uri.joinPath(folder.uri, path));
+
+		const envFiles = changedPaths
+			.filter(path => /(^|\/)\.env/.test(path))
+			.map(path => vscode.Uri.joinPath(folder.uri, path));
 
 		// Se guardan las lineas de cada archivo para los analisis que necesitan ver todo el proyecto a la vez
 		const fileLines = new Map<string, string[]>();
@@ -47,19 +77,20 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const fileLabel = vscode.workspace.asRelativePath(uri); // Ruta relativa del archivo, para identificarlo en el reporte
 			const bytes = await vscode.workspace.fs.readFile(uri); // Se lee el contenido del archivo
 			const lines = Buffer.from(bytes).toString('utf8').split('\n'); // Se divide el texto del documento en lineas
+			const changedLines = getChangedLineNumbers(folder.uri.fsPath, baseBranch, fileLabel);
 			fileLines.set(fileLabel, lines);
 
-			analyzeIndentation(lines, fileLabel, findings);
-			analyzeIfStatements(lines, fileLabel, findings);
-			analyzeParameters(lines, fileLabel, findings);
-			analyzeRequestModels(lines, fileLabel, findings);
-			analyzeDtoAutoMapper(lines, fileLabel, findings);
-			analyzeLinqUsage(lines, fileLabel, findings);
-			analyzeAsyncUsage(lines, fileLabel, findings);
-			analyzeVarUsage(lines, fileLabel, findings);
-			analyzeObjectUsage(lines, fileLabel, findings);
-			analyzeStringInterpolation(lines, fileLabel, findings);
-			analyzeExceptionHandling(lines, fileLabel, findings);
+			analyzeIndentation(lines, fileLabel, findings, changedLines);
+			analyzeIfStatements(lines, fileLabel, findings, changedLines);
+			analyzeParameters(lines, fileLabel, findings, changedLines);
+			analyzeRequestModels(lines, fileLabel, findings, changedLines);
+			analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines);
+			analyzeLinqUsage(lines, fileLabel, findings, changedLines);
+			analyzeAsyncUsage(lines, fileLabel, findings, changedLines);
+			analyzeVarUsage(lines, fileLabel, findings, changedLines);
+			analyzeObjectUsage(lines, fileLabel, findings, changedLines);
+			analyzeStringInterpolation(lines, fileLabel, findings, changedLines);
+			analyzeExceptionHandling(lines, fileLabel, findings, changedLines);
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
@@ -75,7 +106,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		const excludedFolderNames = new Set (['node_module', 'dist', 'out', '.git', 'build']);
 		const folderPaths = await collectFolderPaths(folder.uri, excludedFolderNames);
 
-		analyzeInterfaceContracts(fileLines, findings);
+		await analyzeInterfaceContracts(fileLines, folder.uri, excludePattern, findings);
 		analyzeLayeredStructure(fileLines, folderPaths, findings);
 
 		// --------------------------------------------------------------------------------------

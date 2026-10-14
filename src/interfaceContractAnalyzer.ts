@@ -2,6 +2,8 @@
 // ---- VERFICACION DE CONTRATOS: INTERFACES Y CLASES ABSTRACTAS IMPLEMENTADAS -----------------
 // ---------------------------------------------------------------------------------------------
 
+import * as vscode from 'vscode';
+
 // funcion que quita los comentarios
 function stripLineComment(rawLine: string): string {
     const commentIndex = rawLine.indexOf('//');
@@ -119,6 +121,7 @@ function resolveRequireMethods(contractName: string, registry: ContractRegistry,
     return result;
 }
 
+
 //revisa cada clase que implementa uno de esos contratos y verifica que defina todos los metodos que pide 
 function analyzeCSharpContractImplementations(lines: string[], fileLabel: string, registry: ContractRegistry, findings: string[]): void {
     let insideClass = false; //indica si esta dentro de una clase 
@@ -186,17 +189,43 @@ function analyzeCSharpContractImplementations(lines: string[], fileLabel: string
     if (insideClass) { closeCurrentClass(); }
 }
 
-//funcion principal 
-export function analyzeInterfaceContracts (fileLines: Map<string, string[]>, findings: string[]): void {
-    const registry: ContractRegistry = new Map(); //crea registro vacio 
+//Carpetas donde normalmente viven las interfaces/contratos 
+const CONTRACT_FOLDER_NAMES = ['models', 'model', 'interfaces', 'interface'];
 
-    for (const [fileLabel, lines] of fileLines) {
+//funcion principal 
+export async function analyzeInterfaceContracts (
+    profileLines: Map<string, string[]>,  //solo archivos .cs del PR
+    workspaceFolder: vscode.Uri,
+    excludePattern: string,
+    findings: string[]
+): Promise<void> {
+    const registry: ContractRegistry = new Map(); //crea un registro vacio 
+
+    //se registran los contratos que ya viven en los archivos del PR
+    for (const [fileLabel, lines] of profileLines) {
         if (fileLabel.endsWith('.cs')) {
-            collectCSharpContracts(lines, fileLabel, registry); //llama a esta funcion con cada .cs 
+            collectCSharpContracts(lines, fileLabel, registry);
         }
     }
 
-    for (const [fileLabel, lines] of fileLines) {
+    // en c# la implementacion solo referencia el nombre de la interfaz, si la interfaz no
+    // vive dentro del PR hay que buscarla en las carpetas donde normalmente se definen los
+    // contratos (models/interfaces)
+    const contractFolderGlob = `**/{${CONTRACT_FOLDER_NAMES.join(',')}}/**/*.cs`;
+    const searchPattern = new vscode.RelativePattern(workspaceFolder, contractFolderGlob);
+    const candidateFiles = await vscode.workspace.findFiles(searchPattern, excludePattern);
+
+    for (const uri of candidateFiles) {
+        const fileLabel = vscode.workspace.asRelativePath(uri);
+        if (profileLines.has(fileLabel)) { continue; } //y se proceso 
+        const bytes = await vscode.workspace.fs.readFile(uri);
+        const lines = Buffer.from(bytes).toString('utf8').split('\n');
+        collectCSharpContracts(lines, fileLabel, registry);
+    }
+
+    //se valida la implementacion unicamente sobre las clases que cambiaron en el pr, pero ya
+    //contra el registro completo (PR - capretas de contratos)
+    for (const [fileLabel, lines] of profileLines) {
         if (fileLabel.endsWith('.cs')) {
             //llama a esta funcion con cada .cs, ya con el registo completo 
             analyzeCSharpContractImplementations(lines, fileLabel, registry, findings);

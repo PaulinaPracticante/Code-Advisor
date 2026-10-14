@@ -55,9 +55,10 @@ function countTopLevelParams(paramsText: string) : number {
 }
 
 //funcion principal para hacer el analisis de cuantos parametros hay en una funcion 
-export function analyzeParameters(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeParameters(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     //recorre cada linea del archivo 
     lines.forEach((rawLine, i) => {
+        if (!changedLines.has(i + 1)) { return; }
         const line = stripLineComment(rawLine); //busca un patron de incio de cualquier llamada o declaracion de funcion 
         const match = line.match(/\b[A-Za-z_$][\w$]*\s*\(/);
         if (!match || match.index === undefined) {

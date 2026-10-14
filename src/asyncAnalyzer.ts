@@ -2,6 +2,8 @@
 // ---- VERIFICACION DE PROGRAMACION ASINCRONA (async / await) EN OPERACIONES E/S -------
 // --------------------------------------------------------------------------------------
 
+import { rangeIntersectChangedLines } from "./diffUtils";
+
 //Detecta el inicio de una declaracion de metodo, si no hace match con esto no se analiza 
 const METHOD_PATTERN = /^(?:public|private|protected|internal|static)(?:\s+(?:public|private|protected|internal|static|virtual|override|sealed))*\s+(async\s+)?([\w<>[\],.?\s]+?)\s+([A-Za-z_]\w*)\s*\(/;
 
@@ -38,7 +40,7 @@ const SYNC_IO_CALLS: [RegExp, string, string][] = [
 const EF_CONTEXT_PATTERN = /\b_?(?:context|db|dbContext)\b\./i;
 const EF_SYNC_QUERY_PATTERN = /\.(ToList|FirstOrDefault|SingleOrDefault|Any|Count|Find)\s*\(/;
 
-function analyzeCSharpAsync(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzeCSharpAsync(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     
     //variables que llevan contexto del metodo que se esta recorriendo actualmente
     let insideMethod = false;
@@ -66,7 +68,7 @@ function analyzeCSharpAsync(lines: string[], fileLabel: string, findings: string
 
             const returnType = methodMatch[2].trim();
             //si es async void y no un event handler lo reporta 
-            if (isAsync && returnType === 'void' && !EVENT_HANDLER_PATTERN.test(line)) {
+            if (isAsync && returnType === 'void' && !EVENT_HANDLER_PATTERN.test(line) && changedLines.has(i + 1)) {
                 findings.push(where + ' - el metodo"' + methodName +
                     '"es async void; cambialo a "async Task" para poder esperarlo y capturar sus excepciones');
             }
@@ -80,33 +82,35 @@ function analyzeCSharpAsync(lines: string[], fileLabel: string, findings: string
         if (AWAIT_PATTERN.test(line)) { sawAwait = true; }
 
         //si hay bloqueos sincronos, hay hallazgo
-        if (BLOCKING_PATTERN.test(line)) {
+        if (BLOCKING_PATTERN.test(line) && changedLines.has(i + 1)) {
             findings.push(where + ' - evita bloquear con .Result/.Wait()/GetResult(); usa "await" para no provocar deadlocks');
         }
 
         //si hay un Thread.Sleep en un metodo async, hay hallazgo 
-        if (isAsync && THREAD_SLEEP_PATTERN.test(line)) {
+        if (isAsync && THREAD_SLEEP_PATTERN.test(line) && changedLines.has(i + 1)) {
             findings.push(where + ' - usa "await Task.Delay(...)" en lugar de Thread.Sleep dentro de un metodo async');
         }
 
         //llamadas a metodos Async que no se esperan o retornan, hay hallazgo
         const asyncCall = line.match(ASYNC_CALL_PATTERN);
-        if (asyncCall && asyncCall[1] !== methodName && !ASYNC_CALL_HANDLED_PATTERN.test(line)) {
+        if (asyncCall && asyncCall[1] !== methodName && !ASYNC_CALL_HANDLED_PATTERN.test(line) && changedLines.has(i + 1)) {
             findings.push(where + ' - la llamada a "' + asyncCall[1] +
                 '" no se espera; agrega "await" para no dejar la tarea sin controlar');
         }
 
-        //cualquier llamada de la tabla SYNC_IO_CALLS que no incluya el async en la misma linea, hay hallazgo con sugerencia 
-        for (const [pattern, syncName, asyncName] of SYNC_IO_CALLS) {
-            if (pattern.test(line) && !line.includes(asyncName)) {
-                findings.push(where + ' - "' + asyncName + '"es una operacion de E/S sincrona; usa "await ' +
-                    asyncName + '(...)" y marca el metodo como async');
+        if (changedLines.has(i + 1)) {
+            //cualquier llamada de la tabla SYNC_IO_CALLS que no incluya el async en la misma linea, hay hallazgo con sugerencia 
+            for (const [pattern, syncName, asyncName] of SYNC_IO_CALLS) {
+                if (pattern.test(line) && !line.includes(asyncName)) {
+                    findings.push(where + ' - "' + asyncName + '"es una operacion de E/S sincrona; usa "await ' +
+                        asyncName + '(...)" y marca el metodo como async');
+                }
             }
         }
 
         //consultas EF Core sincronas sobre context/db/dbContext, hallazgo 
         const efMatch = line.match(EF_SYNC_QUERY_PATTERN);
-        if (efMatch && EF_CONTEXT_PATTERN.test(line)) {
+        if (efMatch && EF_CONTEXT_PATTERN.test(line) && changedLines.has(i + 1)) {
             findings.push(where + ' - la consulta a base de datos usa "' + efMatch[1] + '()"; usa "await ' +
                 efMatch[1] + 'Async()" de EF Core');
         }
@@ -122,7 +126,7 @@ function analyzeCSharpAsync(lines: string[], fileLabel: string, findings: string
         //sabe cuando el depth vuelve a 0 o detecta metodos (=> algo; sin llaves) 
         if ((bodyStarted && depth <= 0) || isExpressionBodied) {
             //al cerrar el metodo si era async pero nunca vio el await se reporta que el async o falta esperar algo 
-            if (isAsync && !sawAwait) {
+            if (isAsync && !sawAwait && rangeIntersectChangedLines(changedLines, methodStartLine + 1, i + 1)) {
                 findings.push(fileLabel + ':' + (methodStartLine + 1) + ' - el metodo "' + methodName +
                     '" es async pero no contiene ningun await; quita "async" o espera la operacion de E/S');
             }
@@ -153,7 +157,7 @@ const JS_ASYNC_CALL_HANDLED_PATTERN = /\bawait\b|\breturn\b|\.then\s*\(|=\s*[^=]
 
 const JS_BLOCKING_PATTERN = /\bdeasync\s*\(|\.open\s*\(\s*['"][A-Z]+['"]\s*,\s*[^,]+,\s*false\s*\)/;
 
-function analyzeJsTsAsync(lines: string[], fileLabel: string, findings: string[]): void {
+function analyzeJsTsAsync(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     let insideFunction = false;
     let functionStartLine = 0;
     let functionName = '';
@@ -213,20 +217,22 @@ function analyzeJsTsAsync(lines: string[], fileLabel: string, findings: string[]
 
             if (AWAIT_PATTERN.test(line)) { sawAwait =  true; }
 
-            if (JS_BLOCKING_PATTERN.test(line)) {
+            if (JS_BLOCKING_PATTERN.test(line) && changedLines.has(i + 1)) {
                 findings.push(where + ' - evitar bloquear la ejecucion (deasync, XHR sincrono); usa "await" con una API asincrona');
             }
 
             const asyncCall = line.match(JS_ASYNC_CALL_PATTERN);
-            if (asyncCall && asyncCall[1] !== functionName && !JS_ASYNC_CALL_HANDLED_PATTERN.test(line)) {
+            if (asyncCall && asyncCall[1] !== functionName && !JS_ASYNC_CALL_HANDLED_PATTERN.test(line) && changedLines.has(i + 1)) {
                 findings.push(where + ' - la llamada a "' + asyncCall[1] +
                     '" no se espera; agrega "await" para no dejar la promesa sin controlar');
             }
 
-            for (const [pattern, syncName, asyncName] of JS_SYNC_IO_CALLS) {
-                if (pattern.test(line)) {
-                    findings.push(where + ' -"' + syncName + '" es una operacion de E/S sincrona; usa "await ' +
-                        asyncName + '(...)" en su lugar');
+            if (changedLines.has(i + 1)) {
+                for (const [pattern, syncName, asyncName] of JS_SYNC_IO_CALLS) {
+                    if (pattern.test(line)) {
+                        findings.push(where + ' -"' + syncName + '" es una operacion de E/S sincrona; usa "await ' +
+                            asyncName + '(...)" en su lugar');
+                    }
                 }
             }
 
@@ -238,7 +244,7 @@ function analyzeJsTsAsync(lines: string[], fileLabel: string, findings: string[]
             const isExpressionBodied = !bodyStarted && line.includes('=>') && line.endsWith(';');
 
             if ((bodyStarted && depth <= 0) || isExpressionBodied) {
-                if (isAsync && !sawAwait) {
+                if (isAsync && !sawAwait && rangeIntersectChangedLines(changedLines, functionStartLine + 1, i + 1)) {
                     findings.push(fileLabel + ':' + (functionStartLine + 1) + ' - la funcion "' + functionName +
                         '" es async pero no contiene ningun await; quita "async" o espera la operacion de E/S');
                 }
@@ -249,10 +255,10 @@ function analyzeJsTsAsync(lines: string[], fileLabel: string, findings: string[]
 }
 
 //funcion principal para el analisis
-export function analyzeAsyncUsage(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeAsyncUsage(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     if (fileLabel.endsWith('.cs')) {
-        analyzeCSharpAsync(lines, fileLabel, findings);
+        analyzeCSharpAsync(lines, fileLabel, findings, changedLines);
     } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.tsx') || fileLabel.endsWith('.js') || fileLabel.endsWith('.jsx')) {
-        analyzeJsTsAsync(lines, fileLabel, findings);
+        analyzeJsTsAsync(lines, fileLabel, findings, changedLines);
     }
 }

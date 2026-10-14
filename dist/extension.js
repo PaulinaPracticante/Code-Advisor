@@ -34,10 +34,48 @@ __export(extension_exports, {
   deactivate: () => deactivate
 });
 module.exports = __toCommonJS(extension_exports);
-var vscode2 = __toESM(require("vscode"));
+var vscode3 = __toESM(require("vscode"));
 
 // src/codeReviewerCommand.ts
-var vscode = __toESM(require("vscode"));
+var vscode2 = __toESM(require("vscode"));
+var import_child_process2 = require("child_process");
+
+// src/diffUtils.ts
+var import_child_process = require("child_process");
+function getChangedLineNumbers(workspaceRoot, baseBranch, filePath) {
+  const changedLines = /* @__PURE__ */ new Set();
+  let output;
+  try {
+    output = (0, import_child_process.execFileSync)(
+      "git",
+      ["diff", "--unified=0", "--diff-filter=ACMR", `origin/${baseBranch}...HEAD`, "--", filePath],
+      { cwd: workspaceRoot, encoding: "utf8" }
+    );
+  } catch (error) {
+    throw new Error(`No se pudo obtener el diff de linea para "${filePath}": ${error.message}`);
+  }
+  const hunkHeaderPattern = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))?@@/;
+  for (const line of output.split("\n")) {
+    const match = line.match(hunkHeaderPattern);
+    if (!match) {
+      continue;
+    }
+    const newStart = parseInt(match[1], 10);
+    const newCount = match[2] !== void 0 ? parseInt(match[2], 10) : 1;
+    for (let lineNumber = newStart; lineNumber < newStart + newCount; lineNumber) {
+      changedLines.add(lineNumber);
+    }
+  }
+  return changedLines;
+}
+function rangeIntersectChangedLines(changedLines, startLine, endLineInclusive) {
+  for (let line = startLine; line <= endLineInclusive; line++) {
+    if (changedLines.has(line)) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // src/namingConfig.ts
 function matchesCase(name, caseStyle) {
@@ -251,7 +289,7 @@ function countSpaces(indent) {
   }
   return ancho;
 }
-function analyzeIndentation(lines, fileLabel, findings) {
+function analyzeIndentation(lines, fileLabel, findings, changedLines) {
   let indentationPrevious = "";
   lines.forEach((line, i) => {
     if (line.trim() === "") {
@@ -260,14 +298,16 @@ function analyzeIndentation(lines, fileLabel, findings) {
     const indentMatch = line.match(/^[ \t]*/)?.[0] ?? "";
     const currentWide = countSpaces(indentMatch);
     const previousWide = countSpaces(indentationPrevious);
-    if (currentWide > previousWide) {
-      const newPart = indentMatch.slice(indentationPrevious.length);
-      if (newPart.includes(" ")) {
-        findings.push(fileLabel + ":" + (i + 1) + " - La linea debio usar tabulaciones en lugar de espacios para la identacion");
-      }
-    } else {
-      if (indentMatch.includes(" ")) {
-        findings.push(fileLabel + ":" + (i + 1) + " - La linea debio usar tabulaciones en lugar de espacios para la identacion");
+    if (changedLines.has(i + 1)) {
+      if (currentWide > previousWide) {
+        const newPart = indentMatch.slice(indentationPrevious.length);
+        if (newPart.includes(" ")) {
+          findings.push(fileLabel + ":" + (i + 1) + " - La linea debio usar tabulaciones en lugar de espacios para la identacion");
+        }
+      } else {
+        if (indentMatch.includes(" ")) {
+          findings.push(fileLabel + ":" + (i + 1) + " - La linea debio usar tabulaciones en lugar de espacios para la identacion");
+        }
       }
     }
     indentationPrevious = indentMatch;
@@ -347,7 +387,7 @@ function splitIntoExpressionSegments(text) {
   }
   return [text];
 }
-function checkNestedTernaries(lines, fileLabel, findings) {
+function checkNestedTernaries(lines, fileLabel, findings, changedLines) {
   let i = 0;
   while (i < lines.length) {
     const trimmed = stripLineComment(lines[i]).trim();
@@ -368,14 +408,17 @@ function checkNestedTernaries(lines, fileLabel, findings) {
     }
     const segments = splitIntoExpressionSegments(chainText);
     const hasRealNesting = segments.some((segment) => countTernaryOperators(segment) >= 2);
-    if (hasRealNesting) {
+    if (hasRealNesting && changedLines.has(i + 1)) {
       findings.push(fileLabel + ":" + (i + 1) + ' - Se encontraron operadores ternarios anidados, evita anidar "?:"');
     }
     i = j;
   }
 }
-function analyzeIfStatements(lines, fileLabel, findings) {
+function analyzeIfStatements(lines, fileLabel, findings, changedLines) {
   lines.forEach((rawLine, i) => {
+    if (!changedLines.has(i + 1)) {
+      return;
+    }
     const line = stripLineComment(rawLine);
     const trimmed = line.trim();
     const elseCandidate = trimmed.startsWith("}") ? trimmed.replace(/^\}\s*/, "") : trimmed;
@@ -395,7 +438,7 @@ function analyzeIfStatements(lines, fileLabel, findings) {
       checkBraceUsage(bodyOnSameLine, i, lines, "else", fileLabel, findings);
     }
   });
-  checkNestedTernaries(lines, fileLabel, findings);
+  checkNestedTernaries(lines, fileLabel, findings, changedLines);
 }
 
 // src/parameterAnalyzer.ts
@@ -441,8 +484,11 @@ function countTopLevelParams(paramsText) {
   }
   return count;
 }
-function analyzeParameters(lines, fileLabel, findings) {
+function analyzeParameters(lines, fileLabel, findings, changedLines) {
   lines.forEach((rawLine, i) => {
+    if (!changedLines.has(i + 1)) {
+      return;
+    }
     const line = stripLineComment2(rawLine);
     const match = line.match(/\b[A-Za-z_$][\w$]*\s*\(/);
     if (!match || match.index === void 0) {
@@ -521,7 +567,7 @@ var EXTENSION_TO_CONFIG = {
   jsx: JS_CONFIG,
   php: PHP_CONFIG
 };
-function analyzeRequestModels(lines, fileLabel, findings) {
+function analyzeRequestModels(lines, fileLabel, findings, changedLines) {
   const extension = fileLabel.split(".").pop() ?? "";
   const config = EXTENSION_TO_CONFIG[extension];
   if (!config) {
@@ -552,6 +598,9 @@ function analyzeRequestModels(lines, fileLabel, findings) {
     if (config.missingDefaultPattern.test(line)) {
       findings.push(fileLabel + ":" + (i + 1) + ' - La propiedad debe inicializar con un valor por default (ej. 0, "", string.Empty)');
     }
+    if (config.missingDefaultPattern.test(line) && changedLines.has(i + 1)) {
+      findings.push(fileLabel + ":" + (i + 1) + ' - La propiedad debe inicializar con un valor por default (ej. 0, "", string.Empty)');
+    }
   });
 }
 
@@ -566,7 +615,7 @@ var CLASS_PATTERN = /^(?:(?:public|private|protected|internal|static|abstract|se
 var PROPERTY_PATTERN = /^(?:public|private|protected|internal)\s+(?:readonly\s+)?[\w<>[\],.?]+\s+[A-Za-z_][A-Za-z0-9_]*\s*\{\s*get;\s*(?:set;|init;)?\s*\}/;
 var NEW_INSTANCE_PATTERN = /\b(?:var|[A-Za-z_][A-Za-z0-9_<>]*)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*new\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/;
 var MANUAL_ASSIGNMENT_PATTERN = /^([A-Za-z_][A-Za-z0-9_]*)\.\w+\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.\w+\s*;/;
-function analyzeDtoAutoMapper(lines, fileLabel, findings) {
+function analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines) {
   if (!fileLabel.endsWith(".cs")) {
     return;
   }
@@ -625,7 +674,7 @@ function analyzeDtoAutoMapper(lines, fileLabel, findings) {
     const blockEnds = !MANUAL_ASSIGNMENT_PATTERN.test(nextLine);
     if (assignMatch && blockEnds && streak >= MIN_MANUAL_ASSIGNMENTS) {
       const targetClass = variableTypes.get(streakTarget);
-      if (targetClass && bigClasses.has(targetClass)) {
+      if (targetClass && bigClasses.has(targetClass) && rangeIntersectChangedLines(changedLines, streakStartLine + 1, i + 1)) {
         findings.push(
           fileLabel + ":" + (streakStartLine + 1) + ' - "' + targetClass + '" tiene mas de ' + MAX_PROPERTIES_WITHOUT_AUTOMAPPER + " propiedades, usa AutoMapper (_mapper.Map<" + targetClass + ">(...)) en lugar de asignar cada propiedad manualmente"
         );
@@ -643,7 +692,7 @@ var INCREMENT_PATTERN = /^([A-Za-z_]\w*)\s*(?:\+\+|\+=\s*1\s*;)/;
 var ACCUMULATE_PATTERN = /^([A-Za-z_]\w*)\s*\+=\s*(.+?)\s*;/;
 var ASSING_PATTERN = /^([A-Za-z_]\w*)\s*=\s*(.+?)\s*;/;
 var BREAK_PATTERN = /^break\s*;/;
-function analyzeLinqUsage(lines, fileLabel, findings) {
+function analyzeLinqUsage(lines, fileLabel, findings, changedLines) {
   if (!fileLabel.endsWith(".cs")) {
     return;
   }
@@ -699,26 +748,28 @@ function analyzeLinqUsage(lines, fileLabel, findings) {
       if (line.includes("}")) {
         depth--;
         if (depth <= 0) {
-          if (sawIf && sawAdd) {
-            findings.push(
-              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza el loop manual por "' + sourceCollection + ".Where(" + loopVar + " => condicion).Select(" + loopVar + ' => valor).ToList()" para mejorar la legibilidad'
-            );
-          } else if (sawAdd) {
-            findings.push(
-              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza la transformacion manual por "' + sourceCollection + ".Select(" + loopVar + ' => valor).ToList()" en lugar de usar Add() dentro del loop'
-            );
-          } else if (sawIf && sawIncrement) {
-            findings.push(
-              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza el conteo manual por "' + sourceCollection + ".Count(" + loopVar + ' => condicion)"'
-            );
-          } else if (sawSum) {
-            findings.push(
-              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza la acumulacion manual por "' + sourceCollection + ".Sum(" + loopVar + ' => valor)" en lugar de sumar dentro de un loop'
-            );
-          } else if (sawIf && sawAssignThenBreak) {
-            findings.push(
-              fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza la busqueda manual por "' + sourceCollection + ".FirstOrDefault(" + loopVar + ' => condicion)"'
-            );
+          if (rangeIntersectChangedLines(changedLines, loopStartLine + 1, i + 1)) {
+            if (sawIf && sawAdd) {
+              findings.push(
+                fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza el loop manual por "' + sourceCollection + ".Where(" + loopVar + " => condicion).Select(" + loopVar + ' => valor).ToList()" para mejorar la legibilidad'
+              );
+            } else if (sawAdd) {
+              findings.push(
+                fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza la transformacion manual por "' + sourceCollection + ".Select(" + loopVar + ' => valor).ToList()" en lugar de usar Add() dentro del loop'
+              );
+            } else if (sawIf && sawIncrement) {
+              findings.push(
+                fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza el conteo manual por "' + sourceCollection + ".Count(" + loopVar + ' => condicion)"'
+              );
+            } else if (sawSum) {
+              findings.push(
+                fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza la acumulacion manual por "' + sourceCollection + ".Sum(" + loopVar + ' => valor)" en lugar de sumar dentro de un loop'
+              );
+            } else if (sawIf && sawAssignThenBreak) {
+              findings.push(
+                fileLabel + ":" + (loopStartLine + 1) + ' - reemplaza la busqueda manual por "' + sourceCollection + ".FirstOrDefault(" + loopVar + ' => condicion)"'
+              );
+            }
           }
           insideLoop = false;
         }
@@ -748,7 +799,7 @@ var SYNC_IO_CALLS = [
 ];
 var EF_CONTEXT_PATTERN = /\b_?(?:context|db|dbContext)\b\./i;
 var EF_SYNC_QUERY_PATTERN = /\.(ToList|FirstOrDefault|SingleOrDefault|Any|Count|Find)\s*\(/;
-function analyzeCSharpAsync(lines, fileLabel, findings) {
+function analyzeCSharpAsync(lines, fileLabel, findings, changedLines) {
   let insideMethod = false;
   let methodStartLine = 0;
   let methodName = "";
@@ -769,7 +820,7 @@ function analyzeCSharpAsync(lines, fileLabel, findings) {
       depth = 0;
       bodyStarted = false;
       const returnType = methodMatch[2].trim();
-      if (isAsync && returnType === "void" && !EVENT_HANDLER_PATTERN.test(line)) {
+      if (isAsync && returnType === "void" && !EVENT_HANDLER_PATTERN.test(line) && changedLines.has(i + 1)) {
         findings.push(where + ' - el metodo"' + methodName + '"es async void; cambialo a "async Task" para poder esperarlo y capturar sus excepciones');
       }
     }
@@ -779,23 +830,25 @@ function analyzeCSharpAsync(lines, fileLabel, findings) {
     if (AWAIT_PATTERN.test(line)) {
       sawAwait = true;
     }
-    if (BLOCKING_PATTERN.test(line)) {
+    if (BLOCKING_PATTERN.test(line) && changedLines.has(i + 1)) {
       findings.push(where + ' - evita bloquear con .Result/.Wait()/GetResult(); usa "await" para no provocar deadlocks');
     }
-    if (isAsync && THREAD_SLEEP_PATTERN.test(line)) {
+    if (isAsync && THREAD_SLEEP_PATTERN.test(line) && changedLines.has(i + 1)) {
       findings.push(where + ' - usa "await Task.Delay(...)" en lugar de Thread.Sleep dentro de un metodo async');
     }
     const asyncCall = line.match(ASYNC_CALL_PATTERN);
-    if (asyncCall && asyncCall[1] !== methodName && !ASYNC_CALL_HANDLED_PATTERN.test(line)) {
+    if (asyncCall && asyncCall[1] !== methodName && !ASYNC_CALL_HANDLED_PATTERN.test(line) && changedLines.has(i + 1)) {
       findings.push(where + ' - la llamada a "' + asyncCall[1] + '" no se espera; agrega "await" para no dejar la tarea sin controlar');
     }
-    for (const [pattern, syncName, asyncName] of SYNC_IO_CALLS) {
-      if (pattern.test(line) && !line.includes(asyncName)) {
-        findings.push(where + ' - "' + asyncName + '"es una operacion de E/S sincrona; usa "await ' + asyncName + '(...)" y marca el metodo como async');
+    if (changedLines.has(i + 1)) {
+      for (const [pattern, syncName, asyncName] of SYNC_IO_CALLS) {
+        if (pattern.test(line) && !line.includes(asyncName)) {
+          findings.push(where + ' - "' + asyncName + '"es una operacion de E/S sincrona; usa "await ' + asyncName + '(...)" y marca el metodo como async');
+        }
       }
     }
     const efMatch = line.match(EF_SYNC_QUERY_PATTERN);
-    if (efMatch && EF_CONTEXT_PATTERN.test(line)) {
+    if (efMatch && EF_CONTEXT_PATTERN.test(line) && changedLines.has(i + 1)) {
       findings.push(where + ' - la consulta a base de datos usa "' + efMatch[1] + '()"; usa "await ' + efMatch[1] + 'Async()" de EF Core');
     }
     const opens = (line.match(/{/g) || []).length;
@@ -806,7 +859,7 @@ function analyzeCSharpAsync(lines, fileLabel, findings) {
     depth += opens - closes;
     const isExpressionBodied = !bodyStarted && line.includes("=>") && line.endsWith(";");
     if (bodyStarted && depth <= 0 || isExpressionBodied) {
-      if (isAsync && !sawAwait) {
+      if (isAsync && !sawAwait && rangeIntersectChangedLines(changedLines, methodStartLine + 1, i + 1)) {
         findings.push(fileLabel + ":" + (methodStartLine + 1) + ' - el metodo "' + methodName + '" es async pero no contiene ningun await; quita "async" o espera la operacion de E/S');
       }
       insideMethod = false;
@@ -825,7 +878,7 @@ var JS_SYNC_IO_CALLS = [
 var JS_ASYNC_CALL_PATTERN = /\b([A-Za-z_$][\w$]*Async)\s*\(/;
 var JS_ASYNC_CALL_HANDLED_PATTERN = /\bawait\b|\breturn\b|\.then\s*\(|=\s*[^=]/;
 var JS_BLOCKING_PATTERN = /\bdeasync\s*\(|\.open\s*\(\s*['"][A-Z]+['"]\s*,\s*[^,]+,\s*false\s*\)/;
-function analyzeJsTsAsync(lines, fileLabel, findings) {
+function analyzeJsTsAsync(lines, fileLabel, findings, changedLines) {
   let insideFunction = false;
   let functionStartLine = 0;
   let functionName = "";
@@ -880,16 +933,18 @@ function analyzeJsTsAsync(lines, fileLabel, findings) {
       if (AWAIT_PATTERN.test(line)) {
         sawAwait = true;
       }
-      if (JS_BLOCKING_PATTERN.test(line)) {
+      if (JS_BLOCKING_PATTERN.test(line) && changedLines.has(i + 1)) {
         findings.push(where + ' - evitar bloquear la ejecucion (deasync, XHR sincrono); usa "await" con una API asincrona');
       }
       const asyncCall = line.match(JS_ASYNC_CALL_PATTERN);
-      if (asyncCall && asyncCall[1] !== functionName && !JS_ASYNC_CALL_HANDLED_PATTERN.test(line)) {
+      if (asyncCall && asyncCall[1] !== functionName && !JS_ASYNC_CALL_HANDLED_PATTERN.test(line) && changedLines.has(i + 1)) {
         findings.push(where + ' - la llamada a "' + asyncCall[1] + '" no se espera; agrega "await" para no dejar la promesa sin controlar');
       }
-      for (const [pattern, syncName, asyncName] of JS_SYNC_IO_CALLS) {
-        if (pattern.test(line)) {
-          findings.push(where + ' -"' + syncName + '" es una operacion de E/S sincrona; usa "await ' + asyncName + '(...)" en su lugar');
+      if (changedLines.has(i + 1)) {
+        for (const [pattern, syncName, asyncName] of JS_SYNC_IO_CALLS) {
+          if (pattern.test(line)) {
+            findings.push(where + ' -"' + syncName + '" es una operacion de E/S sincrona; usa "await ' + asyncName + '(...)" en su lugar');
+          }
         }
       }
       const opens = (line.match(/{/g) || []).length;
@@ -900,7 +955,7 @@ function analyzeJsTsAsync(lines, fileLabel, findings) {
       depth += opens - closes;
       const isExpressionBodied = !bodyStarted && line.includes("=>") && line.endsWith(";");
       if (bodyStarted && depth <= 0 || isExpressionBodied) {
-        if (isAsync && !sawAwait) {
+        if (isAsync && !sawAwait && rangeIntersectChangedLines(changedLines, functionStartLine + 1, i + 1)) {
           findings.push(fileLabel + ":" + (functionStartLine + 1) + ' - la funcion "' + functionName + '" es async pero no contiene ningun await; quita "async" o espera la operacion de E/S');
         }
         insideFunction = false;
@@ -908,11 +963,11 @@ function analyzeJsTsAsync(lines, fileLabel, findings) {
     }
   });
 }
-function analyzeAsyncUsage(lines, fileLabel, findings) {
+function analyzeAsyncUsage(lines, fileLabel, findings, changedLines) {
   if (fileLabel.endsWith(".cs")) {
-    analyzeCSharpAsync(lines, fileLabel, findings);
+    analyzeCSharpAsync(lines, fileLabel, findings, changedLines);
   } else if (fileLabel.endsWith(".ts") || fileLabel.endsWith(".tsx") || fileLabel.endsWith(".js") || fileLabel.endsWith(".jsx")) {
-    analyzeJsTsAsync(lines, fileLabel, findings);
+    analyzeJsTsAsync(lines, fileLabel, findings, changedLines);
   }
 }
 
@@ -925,7 +980,7 @@ var LITERAL_PATTERN = /^(-?\d+(\.\d+)?[mMfFdDlLuU]?|true|false|null|'.'|".*")$/;
 var ASYNC_CALL_PATTERN2 = /\b[A-Za-z_]\w*Async\s*\(/;
 var METHOD_PATTERN2 = /^(?:public|private|protected|internal|static)(?:\s+(?:public|private|protected|internal|static|virtual|override|sealed))*\s+(async\s+)?([\w<>[\],.?\s]+?)\s+([A-Za-z_]\w*)\s*\(/;
 var RETURN_NEW_PATTERN = /^return\s+new\s+([A-Za-z_]\w*)\s*[\(\{]/;
-function analyzeVarUsage(lines, fileLabel, findings) {
+function analyzeVarUsage(lines, fileLabel, findings, changedLines) {
   if (!fileLabel.endsWith("cs")) {
     return;
   }
@@ -960,7 +1015,7 @@ function analyzeVarUsage(lines, fileLabel, findings) {
       }
       depth += opens - closes;
       if (bodyStarted && depth <= 0) {
-        if (isAsyncMethod && returnedTypes.size > 1) {
+        if (isAsyncMethod && returnedTypes.size > 1 && rangeIntersectChangedLines(changedLines, methodStartLine + 1, i + 1)) {
           findings.push(
             fileLabel + ":" + (methodStartLine + 1) + " - este metodo async retorna distintos tipos concretos (" + Array.from(returnedTypes).join(", ") + '); evita "var" al capturar su resultado y usa el tipo de retorno explicito'
           );
@@ -983,7 +1038,7 @@ function analyzeVarUsage(lines, fileLabel, findings) {
       return;
     }
     const explicitMatch = codeLine.match(EXPLICIT_DECL_PATTERN);
-    if (explicitMatch) {
+    if (explicitMatch && changedLines.has(i + 1)) {
       const [, declaredType, varName, rhs] = explicitMatch;
       if (declaredType === "var") {
         return;
@@ -1012,8 +1067,11 @@ var CS_OBJECT_PARAM_PATTERN = /\bobject\s+([A-Za-z_]\w*)\s*[,)]/;
 var CS_OBJECT_RETURN_PATTERN = /^(?:(?:public|private|protected|internal|static|virtual|override|async)\s+)+object\s+([A-Za-z_]\w*)\s*\(/;
 var CS_NEW_OBJECT_PATTERN = /\bnew\s+object\s*\(\s*\)/;
 var CS_EQUALS_OVERRIDE_PATTERN = /\bEquals\s*\(\s*object\s+\w+\s*\)/;
-function analyzeCSharpObjectUsage(lines, fileLabel, findings) {
+function analyzeCSharpObjectUsage(lines, fileLabel, findings, changedLines) {
   lines.forEach((rawLine, i) => {
+    if (!changedLines.has(i + 1)) {
+      return;
+    }
     const line = stripLineComment5(rawLine).trim();
     const where = fileLabel + ":" + (i + 1);
     if (CS_EQUALS_OVERRIDE_PATTERN.test(line)) {
@@ -1039,8 +1097,11 @@ function analyzeCSharpObjectUsage(lines, fileLabel, findings) {
 }
 var TS_OBJECT_TYPE_PATTERN = /:\s*(object|Object)\b(?!\s*[.\w])/;
 var TS_NEW_OBJECT_PATTERN = /\bnew\s+Object\s*\(\s*\)/;
-function analyzeTsObjectUsage(lines, fileLabel, findings) {
+function analyzeTsObjectUsage(lines, fileLabel, findings, changedLines) {
   lines.forEach((rawLine, i) => {
+    if (!changedLines.has(i + 1)) {
+      return;
+    }
     const line = stripLineComment5(rawLine).trim();
     const where = fileLabel + ":" + (i + 1);
     const typeMatch = line.match(TS_OBJECT_TYPE_PATTERN);
@@ -1054,8 +1115,11 @@ function analyzeTsObjectUsage(lines, fileLabel, findings) {
 }
 var JS_NEW_OBJECT_PATTERN = /\bnew\s+Object\s*\(\s*\)/;
 var JSDOC_OBJECT_PATTERN = /@(?:param|returns?|type)\s*\{\s*Object\s*\}/;
-function analyzeJsObjectUsage(lines, fileLabel, findings) {
+function analyzeJsObjectUsage(lines, fileLabel, findings, changedLines) {
   lines.forEach((rawLine, i) => {
+    if (!changedLines.has(i + 1)) {
+      return;
+    }
     const line = rawLine.trim();
     const where = fileLabel + ":" + (i + 1);
     if (JS_NEW_OBJECT_PATTERN.test(stripLineComment5(rawLine).trim())) {
@@ -1066,13 +1130,13 @@ function analyzeJsObjectUsage(lines, fileLabel, findings) {
     }
   });
 }
-function analyzeObjectUsage(lines, fileLabel, findings) {
+function analyzeObjectUsage(lines, fileLabel, findings, changedLines) {
   if (fileLabel.endsWith(".cs")) {
-    analyzeCSharpObjectUsage(lines, fileLabel, findings);
+    analyzeCSharpObjectUsage(lines, fileLabel, findings, changedLines);
   } else if (fileLabel.endsWith(".ts") || fileLabel.endsWith(".tsx")) {
-    analyzeTsObjectUsage(lines, fileLabel, findings);
+    analyzeTsObjectUsage(lines, fileLabel, findings, changedLines);
   } else if (fileLabel.endsWith(".js") || fileLabel.endsWith(".jsx")) {
-    analyzeJsObjectUsage(lines, fileLabel, findings);
+    analyzeJsObjectUsage(lines, fileLabel, findings, changedLines);
   }
 }
 
@@ -1086,8 +1150,11 @@ var CS_CONCAT_PATTERN = new RegExp(
   `(?<!\\$)(?:${STRING_LITERAL})\\s*\\+\\s*[A-Za-z_]\\w*|[A-Za-z_]\\w*\\s*\\+\\s*(?<!\\$)(?:${STRING_LITERAL})`
 );
 var CS_SELF_CONCAT_PATTERN = /^([A-Za-z_]\w*)\s*(\+=|=\s*\1\s*\+)/;
-function analyzeCSharpConcat(lines, fileLabel, findings) {
+function analyzeCSharpConcat(lines, fileLabel, findings, changedLines) {
   lines.forEach((rawLine, i) => {
+    if (!changedLines.has(i + 1)) {
+      return;
+    }
     const line = stripLineComment6(rawLine).trim();
     const where = fileLabel + ":" + (i + 1);
     if (CS_SELF_CONCAT_PATTERN.test(line)) {
@@ -1102,8 +1169,11 @@ var JS_CONCAT_PATTERN = new RegExp(
   `(?:${STRING_LITERAL})\\s*\\+\\s*[A-Za-z_$][\\w$]*|[A-Za-z_$][\\w$]*\\s*\\+\\s*(?:${STRING_LITERAL})`
 );
 var JS_SELF_CONCAT_PATTERN = /^([A-Za-z_$][\w$]*)\s*(\+=|=\s*\1\s*\+)/;
-function analyzeJsTsConcat(lines, fileLabel, findings) {
+function analyzeJsTsConcat(lines, fileLabel, findings, changedLines) {
   lines.forEach((rawLine, i) => {
+    if (!changedLines.has(i + 1)) {
+      return;
+    }
     const line = stripLineComment6(rawLine).trim();
     const where = fileLabel + ":" + (i + 1);
     if (JS_SELF_CONCAT_PATTERN.test(line)) {
@@ -1118,8 +1188,11 @@ var PHP_CONCAT_PATTERN = new RegExp(
   `(?:${STRING_LITERAL})\\s*\\.\\s*\\$[A-Za-z_]\\w*|\\$[A-Za-z_]\\w*\\s*\\.\\s*(?:${STRING_LITERAL})`
 );
 var PHP_SELF_CONCAT_PATTERN = /^(\$[A-Za-z_]\w*)\s*(\.=|=\s*\1\s*\.)/;
-function analyzePhpConcat(lines, fileLabel, findings) {
+function analyzePhpConcat(lines, fileLabel, findings, changedLines) {
   lines.forEach((rawLine, i) => {
+    if (!changedLines.has(i + 1)) {
+      return;
+    }
     const line = stripLineComment6(rawLine).trim();
     const where = fileLabel + ":" + (i + 1);
     if (PHP_SELF_CONCAT_PATTERN.test(line)) {
@@ -1130,13 +1203,13 @@ function analyzePhpConcat(lines, fileLabel, findings) {
     }
   });
 }
-function analyzeStringInterpolation(lines, fileLabel, findings) {
+function analyzeStringInterpolation(lines, fileLabel, findings, changedLines) {
   if (fileLabel.endsWith(".cs")) {
-    analyzeCSharpConcat(lines, fileLabel, findings);
+    analyzeCSharpConcat(lines, fileLabel, findings, changedLines);
   } else if (fileLabel.endsWith(".ts") || fileLabel.endsWith(".tsx") || fileLabel.endsWith(".js") || fileLabel.endsWith("jsx")) {
-    analyzeJsTsConcat(lines, fileLabel, findings);
+    analyzeJsTsConcat(lines, fileLabel, findings, changedLines);
   } else if (fileLabel.endsWith(".php")) {
-    analyzePhpConcat(lines, fileLabel, findings);
+    analyzePhpConcat(lines, fileLabel, findings, changedLines);
   }
 }
 
@@ -1176,7 +1249,7 @@ var CS_THREAD_PATTERNS = [
   [/\bParallel\.(For|ForEach)\s*\(/, "Parallel.For/ForEach"],
   [/\bThreadPool\.QueueUserWorkItem\s*\(/, "ThreadPool.QueueUserWorkItem"]
 ];
-function analyzeCSharpExceptionHandling(lines, fileLabel, findings) {
+function analyzeCSharpExceptionHandling(lines, fileLabel, findings, changedLines) {
   let depth = 0;
   const tryDepths = [];
   let insideCatch = false;
@@ -1208,7 +1281,7 @@ function analyzeCSharpExceptionHandling(lines, fileLabel, findings) {
       tryDepths.push(depth + opens);
     }
     const insideTry = tryDepths.length > 0;
-    if (!insideTry) {
+    if (!insideTry && changedLines.has(i + 1)) {
       checkRiskyPatterns(line, where, findings, [CS_DB_PATTERNS, CS_TX_PATTERNS, CS_THREAD_PATTERNS]);
     }
     depth += opens - closes;
@@ -1216,10 +1289,12 @@ function analyzeCSharpExceptionHandling(lines, fileLabel, findings) {
       tryDepths.pop();
     }
     if (insideCatch && depth < catchDepth) {
-      if (!catchHasBody) {
-        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch esta vacio; maneja o registra la excepcion");
-      } else if (!catchLogged) {
-        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch no registra el error en bitacora; agrega un logger.Error/_logger.LogError");
+      if (rangeIntersectChangedLines(changedLines, catchStartLine + 1, i + 1)) {
+        if (!catchHasBody) {
+          findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch esta vacio; maneja o registra la excepcion");
+        } else if (!catchLogged) {
+          findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch no registra el error en bitacora; agrega un logger.Error/_logger.LogError");
+        }
       }
       insideCatch = false;
     }
@@ -1246,7 +1321,7 @@ var JS_THREAD_PATTERNS = [
   [/\bcluster\.fork\s*\(/, "cluster.fork"],
   [/\bchild_process\.fork\s*\(/, "child_process.fork"]
 ];
-function analyzeJsTsExceptionHandling(lines, fileLabel, findings) {
+function analyzeJsTsExceptionHandling(lines, fileLabel, findings, changedLines) {
   let depth = 0;
   const tryDepths = [];
   let insideCatch = false;
@@ -1279,7 +1354,7 @@ function analyzeJsTsExceptionHandling(lines, fileLabel, findings) {
       tryDepths.push(depth + opens);
     }
     const insideTry = tryDepths.length > 0;
-    if (!insideTry) {
+    if (!insideTry && changedLines.has(i + 1)) {
       checkRiskyPatterns(line, where, findings, [JS_DB_PATTERNS, JS_TX_PATTERNS, JS_THREAD_PATTERNS]);
     }
     depth += opens - closes;
@@ -1287,12 +1362,14 @@ function analyzeJsTsExceptionHandling(lines, fileLabel, findings) {
       tryDepths.pop();
     }
     if (insideCatch && depth < catchDepth) {
-      if (!catchHasBody) {
-        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch esta vacio; maneja o registra el error");
-      } else if (!catchLogged) {
-        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch no registra el error en bitacora; agrega un console.error/logger.error");
+      if (rangeIntersectChangedLines(changedLines, catchStartLine + 1, i + 1)) {
+        if (!catchHasBody) {
+          findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch esta vacio; maneja o registra el error");
+        } else if (!catchLogged) {
+          findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch no registra el error en bitacora; agrega un console.error/logger.error");
+        }
+        insideCatch = false;
       }
-      insideCatch = false;
     }
   });
 }
@@ -1310,7 +1387,7 @@ var PHP_TX_PATTERNS = [
   [/->commit\s*\(\s*\)/, "->commit"],
   [/->rollBack\s*\(\s*\)/, "->rollBack"]
 ];
-function analyzePhpExceptionHandling(lines, fileLabel, findings) {
+function analyzePhpExceptionHandling(lines, fileLabel, findings, changedLines) {
   let depth = 0;
   const tryDepths = [];
   let insideCatch = false;
@@ -1342,7 +1419,7 @@ function analyzePhpExceptionHandling(lines, fileLabel, findings) {
       tryDepths.push(depth + opens);
     }
     const insideTry = tryDepths.length > 0;
-    if (!insideTry) {
+    if (!insideTry && changedLines.has(i + 1)) {
       checkRiskyPatterns(line, where, findings, [PHP_DB_PATTERNS, PHP_TX_PATTERNS]);
     }
     depth += opens - closes;
@@ -1350,26 +1427,29 @@ function analyzePhpExceptionHandling(lines, fileLabel, findings) {
       tryDepths.pop();
     }
     if (insideCatch && depth < catchDepth) {
-      if (!catchHasBody) {
-        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch esta vacio; maneja o registra el error");
-      } else if (!catchLogged) {
-        findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch no registra el error en bitacora; agrega un error_log/log::error");
+      if (rangeIntersectChangedLines(changedLines, catchStartLine + 1, i + 1)) {
+        if (!catchHasBody) {
+          findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch esta vacio; maneja o registra el error");
+        } else if (!catchLogged) {
+          findings.push(fileLabel + ":" + (catchStartLine + 1) + " - el catch no registra el error en bitacora; agrega un error_log/log::error");
+        }
       }
       insideCatch = false;
     }
   });
 }
-function analyzeExceptionHandling(lines, fileLabel, findings) {
+function analyzeExceptionHandling(lines, fileLabel, findings, changedLine) {
   if (fileLabel.endsWith(".cs")) {
-    analyzeCSharpExceptionHandling(lines, fileLabel, findings);
+    analyzeCSharpExceptionHandling(lines, fileLabel, findings, changedLine);
   } else if (fileLabel.endsWith(".ts") || fileLabel.endsWith(".tsx") || fileLabel.endsWith(".js") || fileLabel.endsWith("jsx")) {
-    analyzeJsTsExceptionHandling(lines, fileLabel, findings);
+    analyzeJsTsExceptionHandling(lines, fileLabel, findings, changedLine);
   } else if (fileLabel.endsWith(".php")) {
-    analyzePhpExceptionHandling(lines, fileLabel, findings);
+    analyzePhpExceptionHandling(lines, fileLabel, findings, changedLine);
   }
 }
 
 // src/interfaceContractAnalyzer.ts
+var vscode = __toESM(require("vscode"));
 function stripLineComment8(rawLine) {
   const commentIndex = rawLine.indexOf("//");
   return commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
@@ -1514,14 +1594,27 @@ function analyzeCSharpContractImplementations(lines, fileLabel, registry, findin
     closeCurrentClass();
   }
 }
-function analyzeInterfaceContracts(fileLines, findings) {
+var CONTRACT_FOLDER_NAMES = ["models", "model", "interfaces", "interface"];
+async function analyzeInterfaceContracts(profileLines, workspaceFolder, excludePattern, findings) {
   const registry = /* @__PURE__ */ new Map();
-  for (const [fileLabel, lines] of fileLines) {
+  for (const [fileLabel, lines] of profileLines) {
     if (fileLabel.endsWith(".cs")) {
       collectCSharpContracts(lines, fileLabel, registry);
     }
   }
-  for (const [fileLabel, lines] of fileLines) {
+  const contractFolderGlob = `**/{${CONTRACT_FOLDER_NAMES.join(",")}}/**/*.cs`;
+  const searchPattern = new vscode.RelativePattern(workspaceFolder, contractFolderGlob);
+  const candidateFiles = await vscode.workspace.findFiles(searchPattern, excludePattern);
+  for (const uri of candidateFiles) {
+    const fileLabel = vscode.workspace.asRelativePath(uri);
+    if (profileLines.has(fileLabel)) {
+      continue;
+    }
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    const lines = Buffer.from(bytes).toString("utf8").split("\n");
+    collectCSharpContracts(lines, fileLabel, registry);
+  }
+  for (const [fileLabel, lines] of profileLines) {
     if (fileLabel.endsWith(".cs")) {
       analyzeCSharpContractImplementations(lines, fileLabel, registry, findings);
     }
@@ -1560,34 +1653,50 @@ function analyzeLayeredStructure(fileLines, folderPaths, findings) {
 }
 
 // src/codeReviewerCommand.ts
+function getChangedFile(workspaceRoot, baseBranch) {
+  try {
+    (0, import_child_process2.execFileSync)("git", ["fetch", "origin", baseBranch], { cwd: workspaceRoot, encoding: "utf8" });
+    const output = (0, import_child_process2.execFileSync)(
+      "git",
+      ["diff", "--name-only", "--diff-filter=ACMR", `origin/${baseBranch}...HEAD`],
+      { cwd: workspaceRoot, encoding: "utf8" }
+    );
+    return output.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  } catch (error) {
+    throw new Error(`No se pudo obtener el diff contra la rama "origin/${baseBranch}": ${error.message}`);
+  }
+}
 function registerCodeReviewerCommand(context) {
-  const disposable = vscode.commands.registerCommand("codeadvisor.codeReviewer", async () => {
-    const folder = vscode.workspace.workspaceFolders?.[0];
+  const disposable = vscode2.commands.registerCommand("codeadvisor.codeReviewer", async () => {
+    const folder = vscode2.workspace.workspaceFolders?.[0];
     if (!folder) {
-      vscode.window.showErrorMessage("Abra una carpeta que sea un repositorio de git primero");
+      vscode2.window.showErrorMessage("Abra una carpeta que sea un repositorio de git primero");
       return;
     }
     const findings = [];
     const excludePattern = "{**/node_modules/**,**/dist/**,**/out/**,**/.git/**,**/build/**}";
-    const codeFiles = await vscode.workspace.findFiles("**/*.{ts,tsx,js,jsx,php,cs}", excludePattern);
-    const envFiles = await vscode.workspace.findFiles("**/.env*", excludePattern);
+    const baseBranch = vscode2.workspace.getConfiguration("codeadvisor").get("baseBranch", "main");
+    const changedPaths = getChangedFile(folder.uri.fsPath, baseBranch);
+    const codeFiles = changedPaths.filter((path) => /\.(ts|tsx|js|jsx|php|cs)$/.test(path)).map((path) => vscode2.Uri.joinPath(folder.uri, path));
+    const envFiles = changedPaths.filter((path) => /(^|\/)\.env/.test(path)).map((path) => vscode2.Uri.joinPath(folder.uri, path));
     const fileLines = /* @__PURE__ */ new Map();
     for (const uri of codeFiles) {
-      const fileLabel = vscode.workspace.asRelativePath(uri);
-      const bytes = await vscode.workspace.fs.readFile(uri);
+      const fileLabel = vscode2.workspace.asRelativePath(uri);
+      const bytes = await vscode2.workspace.fs.readFile(uri);
       const lines = Buffer.from(bytes).toString("utf8").split("\n");
+      const changedLines = getChangedLineNumbers(folder.uri.fsPath, baseBranch, fileLabel);
       fileLines.set(fileLabel, lines);
-      analyzeIndentation(lines, fileLabel, findings);
-      analyzeIfStatements(lines, fileLabel, findings);
-      analyzeParameters(lines, fileLabel, findings);
-      analyzeRequestModels(lines, fileLabel, findings);
-      analyzeDtoAutoMapper(lines, fileLabel, findings);
-      analyzeLinqUsage(lines, fileLabel, findings);
-      analyzeAsyncUsage(lines, fileLabel, findings);
-      analyzeVarUsage(lines, fileLabel, findings);
-      analyzeObjectUsage(lines, fileLabel, findings);
-      analyzeStringInterpolation(lines, fileLabel, findings);
-      analyzeExceptionHandling(lines, fileLabel, findings);
+      analyzeIndentation(lines, fileLabel, findings, changedLines);
+      analyzeIfStatements(lines, fileLabel, findings, changedLines);
+      analyzeParameters(lines, fileLabel, findings, changedLines);
+      analyzeRequestModels(lines, fileLabel, findings, changedLines);
+      analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines);
+      analyzeLinqUsage(lines, fileLabel, findings, changedLines);
+      analyzeAsyncUsage(lines, fileLabel, findings, changedLines);
+      analyzeVarUsage(lines, fileLabel, findings, changedLines);
+      analyzeObjectUsage(lines, fileLabel, findings, changedLines);
+      analyzeStringInterpolation(lines, fileLabel, findings, changedLines);
+      analyzeExceptionHandling(lines, fileLabel, findings, changedLines);
       const extension = fileLabel.split(".").pop() ?? "";
       const languageId = EXTENSION_TO_LANGUAGE_ID[extension];
       if (languageId) {
@@ -1596,24 +1705,24 @@ function registerCodeReviewerCommand(context) {
     }
     const excludedFolderNames = /* @__PURE__ */ new Set(["node_module", "dist", "out", ".git", "build"]);
     const folderPaths = await collectFolderPaths(folder.uri, excludedFolderNames);
-    analyzeInterfaceContracts(fileLines, findings);
+    await analyzeInterfaceContracts(fileLines, folder.uri, excludePattern, findings);
     analyzeLayeredStructure(fileLines, folderPaths, findings);
     for (const uri of envFiles) {
-      const fileLabel = vscode.workspace.asRelativePath(uri);
-      const bytes = await vscode.workspace.fs.readFile(uri);
+      const fileLabel = vscode2.workspace.asRelativePath(uri);
+      const bytes = await vscode2.workspace.fs.readFile(uri);
       const lines = Buffer.from(bytes).toString("utf8").split("\n");
       analyzeEnvVariables(lines, fileLabel, findings);
     }
     async function collectFolderPaths(uri, excludedNames) {
       const folderPaths2 = [];
-      const entries = await vscode.workspace.fs.readDirectory(uri);
+      const entries = await vscode2.workspace.fs.readDirectory(uri);
       for (const [name, type] of entries) {
         if (excludedNames.has(name)) {
           continue;
         }
-        if (type === vscode.FileType.Directory) {
-          const childUri = vscode.Uri.joinPath(uri, name);
-          folderPaths2.push(vscode.workspace.asRelativePath(childUri));
+        if (type === vscode2.FileType.Directory) {
+          const childUri = vscode2.Uri.joinPath(uri, name);
+          folderPaths2.push(vscode2.workspace.asRelativePath(childUri));
           const nested = await collectFolderPaths(childUri, excludedNames);
           folderPaths2.push(...nested);
         }
@@ -1621,10 +1730,10 @@ function registerCodeReviewerCommand(context) {
       return folderPaths2;
     }
     const reportContent = findings.length > 0 ? findings.join("\n") : "No se encontraron hallazgos.";
-    const reportUri = vscode.Uri.joinPath(folder.uri, "code-advisor-report.txt");
-    await vscode.workspace.fs.writeFile(reportUri, Buffer.from(reportContent, "utf8"));
-    const reportDocument = await vscode.workspace.openTextDocument(reportUri);
-    await vscode.window.showTextDocument(reportDocument);
+    const reportUri = vscode2.Uri.joinPath(folder.uri, "code-advisor-report.txt");
+    await vscode2.workspace.fs.writeFile(reportUri, Buffer.from(reportContent, "utf8"));
+    const reportDocument = await vscode2.workspace.openTextDocument(reportUri);
+    await vscode2.window.showTextDocument(reportDocument);
   });
   context.subscriptions.push(disposable);
 }
@@ -1632,16 +1741,16 @@ function registerCodeReviewerCommand(context) {
 // src/extension.ts
 function activate(context) {
   console.log('Congratulations, your extension "codeadvisor" is now active!');
-  const disposable = vscode2.commands.registerCommand("codeadvisor.gitVerification", () => {
-    const folder = vscode2.workspace.workspaceFolders?.[0];
+  const disposable = vscode3.commands.registerCommand("codeadvisor.gitVerification", () => {
+    const folder = vscode3.workspace.workspaceFolders?.[0];
     if (!folder) {
-      vscode2.window.showErrorMessage("Abra una carpeta que sea un repositorio de git primero");
+      vscode3.window.showErrorMessage("Abra una carpeta que sea un repositorio de git primero");
     }
     const folderPath = folder?.uri.fsPath;
-    const git = vscode2.extensions.getExtension("vscode.git")?.exports.getAPI(1);
-    const repo = folderPath ? git?.getRepository(vscode2.Uri.file(folderPath)) : void 0;
+    const git = vscode3.extensions.getExtension("vscode.git")?.exports.getAPI(1);
+    const repo = folderPath ? git?.getRepository(vscode3.Uri.file(folderPath)) : void 0;
     if (!repo) {
-      vscode2.window.showErrorMessage("No se pudo encontrar un repositorio de git en la carpeta abierta");
+      vscode3.window.showErrorMessage("No se pudo encontrar un repositorio de git en la carpeta abierta");
     }
   });
   registerCodeReviewerCommand(context);

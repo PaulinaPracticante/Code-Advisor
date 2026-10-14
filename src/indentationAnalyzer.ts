@@ -14,7 +14,7 @@ function countSpaces(indent: string): number {
 }
 
 // Revisa la identacion de un archivo y agrega los hallazgos al arreglo de resultados
-export function analyzeIndentation(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeIndentation(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
 	let indentationPrevious = '';
 
 	// Se recorre cada linea del documento y se verifica la identacion
@@ -27,20 +27,22 @@ export function analyzeIndentation(lines: string[], fileLabel: string, findings:
 		const currentWide = countSpaces(indentMatch); // Se obtiene el ancho de la identacion
 		const previousWide = countSpaces(indentationPrevious); // Se obtiene el ancho de la identacion de la linea anterior
 
-		// Se verifica si la identacion de la linea actual es mayor a la anterior
-		if (currentWide > previousWide) {
-			const newPart = indentMatch.slice(indentationPrevious.length);
+		if (changedLines.has(i + 1)) {
+			// Se verifica si la identacion de la linea actual es mayor a la anterior
+			if (currentWide > previousWide) {
+				const newPart = indentMatch.slice(indentationPrevious.length);
 
-			// Se verifica si la identacion de la linea actual tiene espacios
-			if (newPart.includes(' ')) {
-				findings.push(fileLabel + ':' + (i + 1) + ' - La linea debio usar tabulaciones en lugar de espacios para la identacion');
-			}
-		} else {
-			if (indentMatch.includes(' ')) {
-				findings.push(fileLabel + ':' + (i + 1) + ' - La linea debio usar tabulaciones en lugar de espacios para la identacion');
+				// Se verifica si la identacion de la linea actual tiene espacios
+				if (newPart.includes(' ')) {
+					findings.push(fileLabel + ':' + (i + 1) + ' - La linea debio usar tabulaciones en lugar de espacios para la identacion');
+				}
+			} else {
+				if (indentMatch.includes(' ')) {
+					findings.push(fileLabel + ':' + (i + 1) + ' - La linea debio usar tabulaciones en lugar de espacios para la identacion');
+				}
 			}
 		}
 
-		indentationPrevious = indentMatch; // Se guarda la identacion actual para comprar con la siguiente linea
+			indentationPrevious = indentMatch; // Se guarda la identacion actual para comprar con la siguiente linea
 	});
 }
