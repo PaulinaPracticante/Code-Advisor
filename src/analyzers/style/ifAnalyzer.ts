@@ -2,7 +2,7 @@
 // ---- VERIFICACION DE "IF": LLAVES OBLIGATORIAS Y TERNARIOS SIN ANIDAR ----------
 // -------------------------------------------------------------------------------
 
-import { rangeIntersectChangedLines } from "./diffUtils";
+import { rangeIntersectChangedLines } from "../../shared/diffUtils";
 //Corta cualquier comentario de la linea, igual que en los demas analyzers
 function stripLineComment(rawLine: string): string {
 	const commentIndex = rawLine.indexOf('//');
