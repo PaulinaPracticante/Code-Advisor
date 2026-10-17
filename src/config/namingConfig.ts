@@ -29,6 +29,7 @@ export interface LanguageNamingConfig {
 	methodCase: CaseStyle;
 	variableCase: CaseStyle;
 	constantCase: CaseStyle;
+	componentCase?: CaseStyle;
 	classPatterns: RegExp[];
 	functionPatterns: RegExp[]; // Funciones fuera de una clase (vacio si el lenguaje no las tiene, p. ej. C#)
 	methodPatterns: RegExp[]; // Funciones/metodos dentro de una clase
@@ -49,6 +50,7 @@ const JS_TS_NAMING_CONFIG: LanguageNamingConfig = {
 	methodCase: 'camelCase',
 	variableCase: 'camelCase',
 	constantCase: 'camelCase',
+	componentCase: 'PascalCase',
 	//Busca la palabra class y descarta export, default y abstract, y captura el nombre
 	classPatterns: [
 		/^(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][A-Za-z0-9_$]*)/,

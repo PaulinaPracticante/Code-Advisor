@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { registerCodeReviewerCommand } from './codeReviewerCommand';
+import { registerCodeReviewerCommand } from './commands/codeReviewerCommand';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed

@@ -2,7 +2,7 @@
 // ---- VERIFICACION DE USO DE "var" -------------------------------------------------------
 // -----------------------------------------------------------------------------------------
 
-import { rangeIntersectChangedLines } from "./diffUtils";
+import { rangeIntersectChangedLines } from "../../shared/diffUtils";
 
 // Matchea lineas tipo var id = 1023;
 const VAR_DECL_PATTERN = /^var\s+([A-Za-z_]\w*)\s*=\s*(.+?)\s*;\s*$/;
