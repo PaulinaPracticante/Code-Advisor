@@ -1,22 +1,25 @@
 import * as vscode from 'vscode';
 import { execFileSync } from 'child_process';
-import { getChangedLineNumbers } from './diffUtils';
-import { EXTENSION_TO_LANGUAGE_ID } from './namingConfig';
-import { analyzeNaming } from './namingAnalyzer';
-import { analyzeIndentation } from './indentationAnalyzer';
-import { analyzeEnvVariables } from './envAnalyzer';
-import { analyzeIfStatements } from './ifAnalyzer';
-import { analyzeParameters } from './parameterAnalyzer';
-import { analyzeRequestModels } from './requestModelAnalyzer';
-import { analyzeDtoAutoMapper } from './dtoAutoMapperAnalyzer';
-import { analyzeLinqUsage } from './linqAnalyzer';
-import { analyzeAsyncUsage } from './asyncAnalyzer';
-import { analyzeVarUsage } from './varAnalyze';
-import { analyzeObjectUsage } from './objectAnalyzer';
-import { analyzeStringInterpolation } from './stringInterpolationAnalyzer';
-import { analyzeExceptionHandling } from './exceptionHandlingAnalyzer';
-import { analyzeInterfaceContracts } from './interfaceContractAnalyzer';
-import { analyzeLayeredStructure } from './layeredStructureAnalyzer';
+import { loadConfig, buildExcludeMatchers, isExluded } from '../config/configLoader';
+import { getChangedLineNumbers } from '../shared/diffUtils';
+import { EXTENSION_TO_LANGUAGE_ID } from '../config/namingConfig';
+import { analyzeNaming } from '../analyzers/style/namingAnalyzer';
+import { analyzeIndentation } from '../analyzers/style/indentationAnalyzer';
+import { analyzeEnvVariables } from '../analyzers/env/envAnalyzer';
+import { analyzeIfStatements } from '../analyzers/style/ifAnalyzer';
+import { analyzeParameters } from '../analyzers/style/parameterAnalyzer';
+import { analyzeRequestModels } from '../analyzers/structure/requestModelAnalyzer';
+import { analyzeDtoAutoMapper } from '../analyzers/structure/dtoAutoMapperAnalyzer';
+import { analyzeLinqUsage } from '../analyzers/structure/linqAnalyzer';
+import { analyzeAsyncUsage } from '../analyzers/structure/asyncAnalyzer';
+import { analyzeVarUsage } from '../analyzers/style/varAnalyze';
+import { analyzeObjectUsage } from '../analyzers/structure/objectAnalyzer';
+import { analyzeStringInterpolation } from '../analyzers/style/stringInterpolationAnalyzer';
+import { analyzeExceptionHandling } from '../analyzers/structure/exceptionHandlingAnalyzer';
+import { analyzeInterfaceContracts } from '../analyzers/structure/interfaceContractAnalyzer';
+import { analyzeLayeredStructure } from '../analyzers/structure/layeredStructureAnalyzer';
+import { Minimatch } from 'minimatch';
+import { analyzeDuplicateCode } from '../analyzers/structure/duplicateCodeAnalyzer';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -50,24 +53,30 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			return;
 		}
 
+		const config = await loadConfig(folder.uri);
+		const excludeMatchers = buildExcludeMatchers(config);
+
 		const findings: string[] = []; // Aqui se van juntando los hallazgos de todos los archivos del proyecto
 
 		// Se ignoran las carpetas de dependencias y de salida para no revisar codigo generado/de terceros
-		const excludePattern = '{**/node_modules/**,**/dist/**,**/out/**,**/.git/**,**/build/**}';
+		const excludePattern = `{${config.exclude.join(',')}}`;
 
 		const baseBranch = vscode.workspace.getConfiguration('codeadvisor').get<string>('baseBranch', 'main');
 		const changedPaths = getChangedFile(folder.uri.fsPath, baseBranch);
 
 		const codeFiles = changedPaths
 			.filter(path => /\.(ts|tsx|js|jsx|php|cs)$/.test(path))
+			.filter(path => !isExluded(path, excludeMatchers))
 			.map(path => vscode.Uri.joinPath(folder.uri, path));
 
 		const envFiles = changedPaths
 			.filter(path => /(^|\/)\.env/.test(path))
+			.filter (path => !isExluded(path, excludeMatchers))
 			.map(path => vscode.Uri.joinPath(folder.uri, path));
 
 		// Se guardan las lineas de cada archivo para los analisis que necesitan ver todo el proyecto a la vez
 		const fileLines = new Map<string, string[]>();
+		const changedLinesByFile = new Map<string, Set<number>>();
 
 		// --------------------------------------------------------------------------------------
 		// ---- IDENTACION Y NOMBRES DE CLASES, FUNCIONES, METODOS, VARIABLES Y CONSTANTES ------
@@ -79,18 +88,34 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const lines = Buffer.from(bytes).toString('utf8').split('\n'); // Se divide el texto del documento en lineas
 			const changedLines = getChangedLineNumbers(folder.uri.fsPath, baseBranch, fileLabel);
 			fileLines.set(fileLabel, lines);
+			changedLinesByFile.set(fileLabel, changedLines);
 
-			analyzeIndentation(lines, fileLabel, findings, changedLines);
-			analyzeIfStatements(lines, fileLabel, findings, changedLines);
-			analyzeParameters(lines, fileLabel, findings, changedLines);
-			analyzeRequestModels(lines, fileLabel, findings, changedLines);
-			analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines);
-			analyzeLinqUsage(lines, fileLabel, findings, changedLines);
-			analyzeAsyncUsage(lines, fileLabel, findings, changedLines);
-			analyzeVarUsage(lines, fileLabel, findings, changedLines);
-			analyzeObjectUsage(lines, fileLabel, findings, changedLines);
-			analyzeStringInterpolation(lines, fileLabel, findings, changedLines);
-			analyzeExceptionHandling(lines, fileLabel, findings, changedLines);
+			if (config.rules.parameters.enabled) {
+				analyzeParameters(lines, fileLabel, findings, changedLines, config.rules.parameters);
+			}
+
+			if (config.rules.requestModels.enabled) {
+				analyzeRequestModels(lines, fileLabel, findings, changedLines, config.rules.requestModels);
+			}
+
+			if (config.rules.dtoAutoMapper.enabled) {
+				analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines, config.rules.dtoAutoMapper);
+			}
+
+			if (config.rules.linq.enabled) {
+				analyzeLinqUsage(lines, fileLabel, findings, changedLines, config.rules.linq);
+			}
+
+			if (config.rules.objectUsage.enabled) {
+				analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage);
+			}
+
+			if (config.rules.indentation.enabled) { analyzeIndentation(lines, fileLabel, findings, changedLines); }
+			if (config.rules.ifBraces.enabled) { analyzeIfStatements(lines, fileLabel, findings, changedLines); }
+			if (config.rules.async.enabled) { analyzeAsyncUsage(lines, fileLabel, findings, changedLines); }
+			if (config.rules.varUsage.enabled) { analyzeVarUsage(lines, fileLabel, findings, changedLines); }
+			if (config.rules.stringInterpolation.enabled) { analyzeStringInterpolation(lines, fileLabel, findings, changedLines); }
+			if (config.rules.exceptionHandling.enabled) { analyzeExceptionHandling(lines, fileLabel, findings, changedLines); }
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
@@ -103,11 +128,17 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		// ---- CONTRATOS: INTERFACES Y CLASES ABSTRACTAS ---------------------------------------
 		// Se ejecuta despues del ciclo porque una interfaz puede estar en un archivo y su implementacion en otro
 
-		const excludedFolderNames = new Set (['node_module', 'dist', 'out', '.git', 'build']);
-		const folderPaths = await collectFolderPaths(folder.uri, excludedFolderNames);
+		const folderPaths = await collectFolderPaths(folder.uri, excludeMatchers);
 
-		await analyzeInterfaceContracts(fileLines, folder.uri, excludePattern, findings);
-		analyzeLayeredStructure(fileLines, folderPaths, findings);
+		if (config.rules.interfaces.enabled) {
+			await analyzeInterfaceContracts(fileLines, folder.uri, excludePattern, findings, config.rules.interfaces);
+		}
+		if (config.rules.layers.enabled) {
+			analyzeLayeredStructure(fileLines, folderPaths, findings, config.rules.layers);
+		}
+		if (config.rules.duplicateCode.enabled) {
+			analyzeDuplicateCode(fileLines, changedLinesByFile, findings, config.rules.duplicateCode);
+		}
 
 		// --------------------------------------------------------------------------------------
 		// ---- VARIABLES DE ENTORNO------------------------------------------------------------
@@ -117,24 +148,25 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const bytes = await vscode.workspace.fs.readFile(uri);
 			const lines = Buffer.from(bytes).toString('utf8').split('\n');
 
-			analyzeEnvVariables(lines, fileLabel, findings);
+			if(config.rules.envNaming.enabled) {
+				analyzeEnvVariables(lines, fileLabel, findings);
+			}
 		}
 
 		// ----------------------------------------------------------------------------------------
 		// ---- CARPETAS --------------------------------------------------------------------------
-		async function collectFolderPaths(uri: vscode.Uri, excludedNames: Set<string>): Promise<string[]> {
+		async function collectFolderPaths(uri: vscode.Uri, excludedNames: Minimatch[]): Promise<string[]> {
 			const folderPaths: string[] = [];
 			const entries = await vscode.workspace.fs.readDirectory(uri);
 
 			for (const [name, type] of entries) {
-				if (excludedNames.has(name)) {
-					continue;
-				}
 
 				if (type === vscode.FileType.Directory) {
 					const childUri = vscode.Uri.joinPath(uri, name);
-					folderPaths.push(vscode.workspace.asRelativePath(childUri));
-					const nested = await collectFolderPaths(childUri, excludedNames);
+					const relativePath = vscode.workspace.asRelativePath(childUri);
+					if (isExluded(relativePath + '/', excludeMatchers)) { continue; }
+					folderPaths.push(relativePath);
+					const nested = await collectFolderPaths(childUri, excludeMatchers);
 					folderPaths.push(...nested);
 				}
 			}

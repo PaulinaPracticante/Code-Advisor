@@ -2,10 +2,8 @@
 // ---- VERIFICACION DE USO DE AUTOMAPPER: CLASES CON MAS DE 15 PROPIEDADES
 // ---------------------------------------------------------------------------------------
 
-import { rangeIntersectChangedLines } from "./diffUtils";
-
-const MAX_PROPERTIES_WITHOUT_AUTOMAPPER = 15; // si una clase tiene mas de 15 propiedades ya se considera grande 
-const MIN_MANUAL_ASSIGNMENTS = 3; // apartir de cuantas asignacioes seguidas se considera "mapeo manual"
+import { rangeIntersectChangedLines } from "../../shared/diffUtils";
+import { DtoAutoMapperConfig } from "../../config/configLoader";
 
 // corta cualquier linea que se un comentarios, que inicie con //
 function stripLineComment(rawLine: string) : string {
@@ -25,7 +23,8 @@ const NEW_INSTANCE_PATTERN = /\b(?:var|[A-Za-z_][A-Za-z0-9_<>]*)\s+([A-Za-z_][A-
 // "dto.Prop = entidad.Prop;"
 const MANUAL_ASSIGNMENT_PATTERN = /^([A-Za-z_][A-Za-z0-9_]*)\.\w+\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\.\w+\s*;/;
 
-export function analyzeDtoAutoMapper(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
+export function analyzeDtoAutoMapper(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>, config: DtoAutoMapperConfig): void {
+    const { maxProperties, minManualAssignments } = config;
     if (!fileLabel.endsWith('.cs')) { //Si el archivo no es c# no se considera para esta validacion
         return; //AutoMapper es especifico de .NET
     }
@@ -59,7 +58,7 @@ export function analyzeDtoAutoMapper(lines: string[], fileLabel: string, finding
                 depth--;
                 if (depth <= 0) {
                     //si hay mas de 15 propiedades agrega el nombre a bigClasses
-                    if (propertyCount >= MAX_PROPERTIES_WITHOUT_AUTOMAPPER) {
+                    if (propertyCount >= maxProperties) {
                         bigClasses.add(currentClassName);
                     }
                     currentClassName = null;
@@ -100,14 +99,14 @@ export function analyzeDtoAutoMapper(lines: string[], fileLabel: string, finding
         const blockEnds = !MANUAL_ASSIGNMENT_PATTERN.test(nextLine);
 
         //cuando la racha termina y tiene >= 3 asignaiones seguidas
-        if (assignMatch && blockEnds && streak >= MIN_MANUAL_ASSIGNMENTS) {
+        if (assignMatch && blockEnds && streak >= minManualAssignments) {
             const targetClass = variableTypes.get(streakTarget);
             // verifica si la variable corresponde a una clase de bigClasses 
             //si es asi agrega el mensaje en findings 
             if (targetClass && bigClasses.has(targetClass) && rangeIntersectChangedLines(changedLines, streakStartLine + 1, i + 1)) {
                 findings.push(
                     fileLabel + ':' + (streakStartLine + 1) +
-                    ' - "' + targetClass + '" tiene mas de ' + MAX_PROPERTIES_WITHOUT_AUTOMAPPER +
+                    ' - "' + targetClass + '" tiene mas de ' + maxProperties +
                     ' propiedades, usa AutoMapper (_mapper.Map<' + targetClass +'>(...)) en lugar de asignar cada propiedad manualmente'
                 )
             }

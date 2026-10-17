@@ -1,6 +1,7 @@
 // -----------------------------------------------------------------------------------
 // ---- VERIFICACION DE MODELOS DE REQUEST: PROPIEDADES CON VALOR POR DEFAULT --------
 // -----------------------------------------------------------------------------------
+import { RequestModelsConfig } from "../../config/configLoader";
 
 //corta cualquier linea que se un comentarios, que inicie con //
 function stripLineComment(rawLine: string): string {
@@ -13,30 +14,24 @@ interface RequestModelConfig {
     missingDefaultPattern: RegExp; // si matchea, la propiedad NO tiene un valor por default, es un hallazgo
 }
 
-//Nombres que puede tener la clase donde esten los request
-const REQUEST_NAME_SUFFIXES = ['Request', 'Dto', 'Input', 'Command', 'Query', 'Payload'];
-
-//Nombres de carpetas donde puedan estar los archivos 
-const REQUEST_FOLDER_KEYWORDS = ['request', 'dtos', 'dto', 'inputs', 'contracts'];
-
 // Funcion para saber si una clase es un modelo de request su nombre termina con los nombres en REQUEST_NAME_SUFFIXES
-function isRequestClassName(className: string): boolean {
-    return REQUEST_NAME_SUFFIXES.some(suffix => new RegExp(`${suffix}$`, 'i').test(className));
+function isRequestClassName(className: string, suffixes: string[]): boolean {
+    return suffixes.some(suffix => new RegExp(`${suffix}$`, 'i').test(className));
 }
 
-function isInRequestFolder(fileLabel: string): boolean {
+function isInRequestFolder(fileLabel: string, folders: string[]): boolean {
     const normalized = fileLabel.toLowerCase().replace(/\\/g, '/');
-    return REQUEST_FOLDER_KEYWORDS.some(folder => normalized.includes(`/${folder}/`));
+    return folders.some(folder => normalized.includes(`/${folder}/`));
 }
 
 function extendsOrImplementsRequest(classDeclarationLine: string): boolean {
     return /\b(?:extends|implements|:)\s+[\w<>,\s]*Request/i.test(classDeclarationLine);
 }
 
-function isRequestModel(className: string, classDeclarationLine: string, fileLabel: string): boolean {
+function isRequestModel(className: string, classDeclarationLine: string, fileLabel: string, config: RequestModelsConfig): boolean {
     return (
-        isRequestClassName(className) ||
-        isInRequestFolder(fileLabel) ||
+        isRequestClassName(className, config.suffixes) ||
+        isInRequestFolder(fileLabel, config.folders) ||
         extendsOrImplementsRequest(classDeclarationLine)
     );
 }
@@ -69,29 +64,27 @@ const PHP_CONFIG: RequestModelConfig = {
 const EXTENSION_TO_CONFIG: Record<string, RequestModelConfig> = {
     cs: CSHARP_CONFIG,
     ts: TS_CONFIG,
-    tsx: TS_CONFIG,
     js: JS_CONFIG,
-    jsx: JS_CONFIG,
     php: PHP_CONFIG,
 };
 
 // Funcion principal
-export function analyzeRequestModels(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
-    const extension = fileLabel.split('.').pop() ?? ''; //determina la extension del archivo 
-    const config = EXTENSION_TO_CONFIG[extension]; //determina la configuracion del archivo 
-    if (!config) {
+export function analyzeRequestModels(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>, config: RequestModelsConfig): void {
+    const extension = fileLabel.split('.').pop() ?? ''; //determina la extension del archivo
+    const extensionConfig = EXTENSION_TO_CONFIG[extension]; //determina la configuracion de regex del archivo
+    if (!extensionConfig) {
         return;
     }
 
     let insideRequestClass = false; //si actualmente esta dentro de una clase que califica como "request"
-    let depth = 0; //profundidad de llaves para saber cuando se sale de la clase 
+    let depth = 0; //profundidad de llaves para saber cuando se sale de la clase
 
     lines.forEach((rawLine, i) => {
         const line = stripLineComment(rawLine).trim(); //limpia comentarios
-        
-        const classMatch = line.match(config.classPattern);
-        if (classMatch) { //si la linea matchea 
-            insideRequestClass = isRequestModel(classMatch[1], line, fileLabel); //evalua si el nombre de esa clase es de request
+
+        const classMatch = line.match(extensionConfig.classPattern);
+        if (classMatch) { //si la linea matchea
+            insideRequestClass = isRequestModel(classMatch[1], line, fileLabel, config); //evalua si el nombre de esa clase es de request
             depth = 0; //reinicia depth a 0
         }
 
@@ -112,13 +105,16 @@ export function analyzeRequestModels(lines: string[], fileLabel: string, finding
             }
         }
 
-        //si la linea matchea con missingDefaultPattern agrega el hallazgo a findings 
-        if (config.missingDefaultPattern.test(line)) {
-            findings.push(fileLabel + ':' + (i + 1) + ' - La propiedad debe inicializar con un valor por default (ej. 0, "", string.Empty)');
-        }
-
-        if (config.missingDefaultPattern.test(line) && changedLines.has(i + 1)) {
-            findings.push(fileLabel + ':' + (i + 1) + ' - La propiedad debe inicializar con un valor por default (ej. 0, "", string.Empty)');
+        const isOptionalProperty = /\?\s*:/.test(line);
+        const isReadonlyProperty = /\breadonly\b/.test(line);
+        //si la linea matchea con missingDefaultPattern agrega el hallazgo a findings, salvo que el tipo
+        //de propiedad (opcional/readonly) este explicitamente excluido por la config
+        if (extensionConfig.missingDefaultPattern.test(line) && changedLines.has(i + 1)) {
+            const skipOptional = isOptionalProperty && !config.checkOptionalProperties;
+            const skipReadonly = isReadonlyProperty && !config.checkReadonlyProperties;
+            if (!skipOptional && !skipReadonly) {
+                findings.push(fileLabel + ':' + (i + 1) + ' - La propiedad debe inicializar con un valor por default (ej. 0, "", string.Empty)');
+            }
         }
     });
 }

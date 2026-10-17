@@ -16,13 +16,13 @@ export function getChangedLineNumbers(workspaceRoot: string, baseBranch: string,
         throw new Error(`No se pudo obtener el diff de linea para "${filePath}": ${(error as Error).message}`);
     }
 
-    const hunkHeaderPattern = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))?@@/;
+    const hunkHeaderPattern = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
     for (const line of output.split('\n')) {
         const match = line.match(hunkHeaderPattern);
         if (!match) { continue; }
         const newStart = parseInt(match[1], 10);
         const newCount = match[2] !== undefined ? parseInt(match[2], 10): 1;
-        for (let lineNumber = newStart; lineNumber < newStart + newCount; lineNumber) {
+        for (let lineNumber = newStart; lineNumber < newStart + newCount; lineNumber++) {
             changedLines.add(lineNumber);
         }
     }

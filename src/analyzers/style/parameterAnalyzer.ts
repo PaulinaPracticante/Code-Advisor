@@ -2,8 +2,7 @@
 // ---- VERIFICACION DE PARAMETROS: MAS DE 3 DEBEN IR EN VARIAS LINEAS -----------
 // -------------------------------------------------------------------------------
 
-const MAX_LINE_LENGHT = 120; //limite de carcacteres por linea
-const MAX_INLINE_PARAMS = 3; // maximo de parametros permitidos por linea 
+import { ParametersConfig } from "../../config/configLoader";
 
 //funcion que ignora los comentarios en el archivo 
 function stripLineComment(rawLine: string) {
@@ -55,8 +54,9 @@ function countTopLevelParams(paramsText: string) : number {
 }
 
 //funcion principal para hacer el analisis de cuantos parametros hay en una funcion 
-export function analyzeParameters(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
+export function analyzeParameters(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>, config: ParametersConfig): void {
     //recorre cada linea del archivo 
+    const { maxInLineParams, maxLineLength} = config;
     lines.forEach((rawLine, i) => {
         if (!changedLines.has(i + 1)) { return; }
         const line = stripLineComment(rawLine); //busca un patron de incio de cualquier llamada o declaracion de funcion 
@@ -86,17 +86,17 @@ export function analyzeParameters(lines: string[], fileLabel: string, findings: 
 
         //cuenta los parametros, si son 3 o menos no reporta nada 
         const paramCount = countTopLevelParams(paramsText);
-        if (paramCount <= MAX_INLINE_PARAMS) {
+        if (paramCount <= maxInLineParams) {
             return;
         }
 
         //si son mas de tres parametros reporta el hallazgo 
         if (closing.line === i) {
-            findings.push(fileLabel + ':' + (i + 1) + ' - El metodo tiene mas de ' + MAX_INLINE_PARAMS + ' parametros, separalos en una linea por parametro con su tabulador');
+            findings.push(fileLabel + ':' + (i + 1) + ' - El metodo tiene mas de ' + maxInLineParams + ' parametros, separalos en una linea por parametro con su tabulador');
         }
 
         //si la linea excede 120 caracteres tambien reporta el hallazgo que la linea es muy larga 
-        if (rawLine.length > MAX_LINE_LENGHT) {
+        if (rawLine.length > maxLineLength) {
             findings.push(fileLabel + ':' + (i + 1) + ' - La linea es muy larga (' + rawLine.length + 'caracteres), evita lienas demasiado largas');
         }
     });

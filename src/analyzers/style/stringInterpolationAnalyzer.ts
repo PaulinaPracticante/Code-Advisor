@@ -83,7 +83,7 @@ function analyzePhpConcat(lines: string[], fileLabel: string, findings: string[]
 export function analyzeStringInterpolation(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     if (fileLabel.endsWith('.cs')) {
         analyzeCSharpConcat(lines, fileLabel, findings, changedLines);
-    } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.tsx') || fileLabel.endsWith('.js') || fileLabel.endsWith('jsx')) {
+    } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.js')) {
         analyzeJsTsConcat(lines, fileLabel, findings, changedLines);
     } else if (fileLabel.endsWith('.php')) {
         analyzePhpConcat(lines, fileLabel, findings, changedLines);

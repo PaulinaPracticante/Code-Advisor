@@ -2,7 +2,7 @@
 // ---- VERIFICACION DE MANEJO DE EXCEPCIONES (try-catch, BD, transacciones, hilos) ------
 // ---------------------------------------------------------------------------------------
 
-import { rangeIntersectChangedLines } from "./diffUtils";
+import { rangeIntersectChangedLines } from "../../shared/diffUtils";
 
 //funcion que corta los comentarios, lo que venga despues de //
 function stripLineComment(rawLine: string): string {
@@ -306,7 +306,7 @@ function analyzePhpExceptionHandling(lines: string[], fileLabel: string, finding
 export function analyzeExceptionHandling(lines: string[], fileLabel: string, findings: string[], changedLine: Set<number>): void {
     if (fileLabel.endsWith('.cs')) {
         analyzeCSharpExceptionHandling(lines, fileLabel, findings, changedLine);
-    } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.tsx') || fileLabel.endsWith('.js') || fileLabel.endsWith('jsx')) {
+    } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.js')) {
         analyzeJsTsExceptionHandling(lines, fileLabel, findings, changedLine);
     } else if (fileLabel.endsWith('.php')) {
         analyzePhpExceptionHandling(lines, fileLabel, findings, changedLine);

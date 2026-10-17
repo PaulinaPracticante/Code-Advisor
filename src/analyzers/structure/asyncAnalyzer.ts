@@ -2,7 +2,7 @@
 // ---- VERIFICACION DE PROGRAMACION ASINCRONA (async / await) EN OPERACIONES E/S -------
 // --------------------------------------------------------------------------------------
 
-import { rangeIntersectChangedLines } from "./diffUtils";
+import { rangeIntersectChangedLines } from "../../shared/diffUtils";
 
 //Detecta el inicio de una declaracion de metodo, si no hace match con esto no se analiza 
 const METHOD_PATTERN = /^(?:public|private|protected|internal|static)(?:\s+(?:public|private|protected|internal|static|virtual|override|sealed))*\s+(async\s+)?([\w<>[\],.?\s]+?)\s+([A-Za-z_]\w*)\s*\(/;
@@ -210,46 +210,46 @@ function analyzeJsTsAsync(lines: string[], fileLabel: string, findings: string[]
                     bodyStarted = false;
                 }
             }
+        }
 
-            if (!insideFunction) {
-                return;
-            }
+        if (!insideFunction) {
+            return;
+        }
 
-            if (AWAIT_PATTERN.test(line)) { sawAwait =  true; }
+        if (AWAIT_PATTERN.test(line)) { sawAwait =  true; }
 
-            if (JS_BLOCKING_PATTERN.test(line) && changedLines.has(i + 1)) {
-                findings.push(where + ' - evitar bloquear la ejecucion (deasync, XHR sincrono); usa "await" con una API asincrona');
-            }
+        if (JS_BLOCKING_PATTERN.test(line) && changedLines.has(i + 1)) {
+            findings.push(where + ' - evitar bloquear la ejecucion (deasync, XHR sincrono); usa "await" con una API asincrona');
+        }
 
-            const asyncCall = line.match(JS_ASYNC_CALL_PATTERN);
-            if (asyncCall && asyncCall[1] !== functionName && !JS_ASYNC_CALL_HANDLED_PATTERN.test(line) && changedLines.has(i + 1)) {
-                findings.push(where + ' - la llamada a "' + asyncCall[1] +
-                    '" no se espera; agrega "await" para no dejar la promesa sin controlar');
-            }
+        const asyncCall = line.match(JS_ASYNC_CALL_PATTERN);
+        if (asyncCall && asyncCall[1] !== functionName && !JS_ASYNC_CALL_HANDLED_PATTERN.test(line) && changedLines.has(i + 1)) {
+            findings.push(where + ' - la llamada a "' + asyncCall[1] +
+                '" no se espera; agrega "await" para no dejar la promesa sin controlar');
+        }
 
-            if (changedLines.has(i + 1)) {
-                for (const [pattern, syncName, asyncName] of JS_SYNC_IO_CALLS) {
-                    if (pattern.test(line)) {
-                        findings.push(where + ' -"' + syncName + '" es una operacion de E/S sincrona; usa "await ' +
-                            asyncName + '(...)" en su lugar');
-                    }
+        if (changedLines.has(i + 1)) {
+            for (const [pattern, syncName, asyncName] of JS_SYNC_IO_CALLS) {
+                if (pattern.test(line)) {
+                    findings.push(where + ' -"' + syncName + '" es una operacion de E/S sincrona; usa "await ' +
+                        asyncName + '(...)" en su lugar');
                 }
             }
+        }
 
-            const opens = (line.match(/{/g) || []).length;
-            const closes = (line.match(/}/g) || []).length;
-            if (opens > 0) { bodyStarted = true;}
-            depth += opens - closes;
+        const opens = (line.match(/{/g) || []).length;
+        const closes = (line.match(/}/g) || []).length;
+        if (opens > 0) { bodyStarted = true;}
+        depth += opens - closes;
 
-            const isExpressionBodied = !bodyStarted && line.includes('=>') && line.endsWith(';');
+        const isExpressionBodied = !bodyStarted && line.includes('=>') && line.endsWith(';');
 
-            if ((bodyStarted && depth <= 0) || isExpressionBodied) {
-                if (isAsync && !sawAwait && rangeIntersectChangedLines(changedLines, functionStartLine + 1, i + 1)) {
-                    findings.push(fileLabel + ':' + (functionStartLine + 1) + ' - la funcion "' + functionName +
-                        '" es async pero no contiene ningun await; quita "async" o espera la operacion de E/S');
-                }
-                insideFunction = false;
+        if ((bodyStarted && depth <= 0) || isExpressionBodied) {
+            if (isAsync && !sawAwait && rangeIntersectChangedLines(changedLines, functionStartLine + 1, i + 1)) {
+                findings.push(fileLabel + ':' + (functionStartLine + 1) + ' - la funcion "' + functionName +
+                    '" es async pero no contiene ningun await; quita "async" o espera la operacion de E/S');
             }
+            insideFunction = false;
         }
     });
 }
@@ -258,7 +258,7 @@ function analyzeJsTsAsync(lines: string[], fileLabel: string, findings: string[]
 export function analyzeAsyncUsage(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
     if (fileLabel.endsWith('.cs')) {
         analyzeCSharpAsync(lines, fileLabel, findings, changedLines);
-    } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.tsx') || fileLabel.endsWith('.js') || fileLabel.endsWith('.jsx')) {
+    } else if (fileLabel.endsWith('.ts') || fileLabel.endsWith('.js')) {
         analyzeJsTsAsync(lines, fileLabel, findings, changedLines);
     }
 }
