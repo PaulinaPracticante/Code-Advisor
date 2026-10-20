@@ -3,7 +3,7 @@
 // -------------------------------------------------------------------------------
 
 //Tipo con los estilos que se deben de reconocer
-export type CaseStyle = 'PascalCase' | 'camelCase' | 'UPPER_SNAKE_CASE';
+export type CaseStyle = 'PascalCase' | 'camelCase' | 'UPPER_SNAKE_CASE' | 'kebab-case';
 
 //Funcion que determina si el nombre si cumple con el estilo esperado
 export function matchesCase(name: string, caseStyle: CaseStyle): boolean {
@@ -17,6 +17,8 @@ export function matchesCase(name: string, caseStyle: CaseStyle): boolean {
 		case 'UPPER_SNAKE_CASE':
 			//Todo debe de ser mayuscula y el resto mayuscula, numeros o guion bajo
 			return /^[A-Z][A-Z0-9_]*$/.test(name);
+		case 'kebab-case':
+			return /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(name);
 	}
 }
 

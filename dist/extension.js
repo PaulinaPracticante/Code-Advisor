@@ -1966,7 +1966,9 @@ var DEFAULT_CONFIG = {
     stringInterpolation: { enabled: true },
     exceptionHandling: { enabled: true },
     naming: { enabled: true },
-    envNaming: { enabled: true }
+    envNaming: { enabled: true },
+    fileNaming: { enabled: true },
+    cssClassNaming: { enabled: true }
   }
 };
 function deepMerge(base, override) {
@@ -2051,6 +2053,8 @@ function matchesCase(name, caseStyle) {
       return /^[a-z][a-zA-Z0-9]*$/.test(name);
     case "UPPER_SNAKE_CASE":
       return /^[A-Z][A-Z0-9_]*$/.test(name);
+    case "kebab-case":
+      return /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(name);
   }
 }
 var CONTROL_FLOW_KEYWORDS = /* @__PURE__ */ new Set(["if", "for", "while", "switch", "catch", "do", "try", "finally", "foreach", "using", "lock"]);
@@ -2176,6 +2180,10 @@ function matchFirstGroup(text, patterns) {
 function startsWithUpperCase(name) {
   return /^[A-Z]/.test(name);
 }
+var HOOK_NAME_PATTERN = /^use[A-Z]/;
+function isHookName(name) {
+  return HOOK_NAME_PATTERN.test(name);
+}
 function extractNamesByCategory(lines, config) {
   const classNames = [];
   const functionNames = [];
@@ -2183,6 +2191,7 @@ function extractNamesByCategory(lines, config) {
   const variableNames = [];
   const constantNames = [];
   const componentNames = [];
+  const hookNames = [];
   let braceDepth = 0;
   const classOuterDepths = [];
   let pendingClassOuterDepth = null;
@@ -2206,7 +2215,9 @@ function extractNamesByCategory(lines, config) {
     } else {
       const functionMatch = matchFirstGroup(trimmed, config.functionPatterns);
       if (functionMatch) {
-        if (config.componentCase && startsWithUpperCase(functionMatch)) {
+        if (config.componentCase && isHookName(functionMatch)) {
+          hookNames.push(functionMatch);
+        } else if (config.componentCase && startsWithUpperCase(functionMatch)) {
           componentNames.push(functionMatch);
         } else {
           functionNames.push(functionMatch);
@@ -2219,7 +2230,9 @@ function extractNamesByCategory(lines, config) {
     }
     const constantMatch = matchFirstGroup(trimmed, config.constantPatterns);
     if (constantMatch) {
-      if (config.componentCase && startsWithUpperCase(constantMatch)) {
+      if (config.componentCase && isHookName(constantMatch)) {
+        hookNames.push(constantMatch);
+      } else if (config.componentCase && startsWithUpperCase(constantMatch)) {
         componentNames.push(constantMatch);
       } else {
         constantNames.push(constantMatch);
@@ -2236,7 +2249,7 @@ function extractNamesByCategory(lines, config) {
       pendingClassOuterDepth = null;
     }
   }
-  return { classNames, functionNames, methodNames, variableNames, constantNames, componentNames };
+  return { classNames, functionNames, methodNames, variableNames, constantNames, componentNames, hookNames };
 }
 function reportInvalidNames(names, caseStyle, label, fileLabel, findings) {
   names.forEach((name) => {
@@ -2250,7 +2263,7 @@ function analyzeNaming(lines, languageId, fileLabel, findings) {
   if (!namingConfig) {
     return;
   }
-  const { classNames, functionNames, methodNames, variableNames, constantNames, componentNames } = extractNamesByCategory(lines, namingConfig);
+  const { classNames, functionNames, methodNames, variableNames, constantNames, componentNames, hookNames } = extractNamesByCategory(lines, namingConfig);
   reportInvalidNames(classNames, namingConfig.classCase, "La clase", fileLabel, findings);
   reportInvalidNames(functionNames, namingConfig.functionCase, "La funci\xF3n", fileLabel, findings);
   reportInvalidNames(methodNames, namingConfig.methodCase, "El m\xE9todo", fileLabel, findings);
@@ -2258,6 +2271,7 @@ function analyzeNaming(lines, languageId, fileLabel, findings) {
   reportInvalidNames(constantNames, namingConfig.constantCase, "La constante", fileLabel, findings);
   if (namingConfig.componentCase) {
     reportInvalidNames(componentNames, namingConfig.componentCase, "El componente", fileLabel, findings);
+    reportInvalidNames(hookNames, namingConfig.functionCase, "El hook", fileLabel, findings);
   }
 }
 
@@ -4075,6 +4089,87 @@ function analyzeDuplicateCode(fileLines, changedLinesByFile, findings, config) {
   }
 }
 
+// src/analyzers/style/fileNamingAnalyzer.ts
+var NEXT_ROUTE_FOLDER_PATTERN = /(^|\/)(?:src\/)?(?:pages|app)\//;
+var COMPONENT_EXPORT_PATTERNS = [
+  /^export\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)/,
+  /^export\s+default\s+([A-Z][A-Za-z0-9_]*)\s*;?\s*$/,
+  /^export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/,
+  /^export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)\s*(?::|=)/,
+  /^function\s+([A-Z][A-Za-z0-9_]*)/,
+  /^const\s+([A-Z][A-Za-z0-9_]*)\s*(?::|=)/
+];
+function fileExportsComponent(lines) {
+  return lines.some((rawLine) => {
+    const commentIndex = rawLine.indexOf("//");
+    const line = (commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex)).trim();
+    return COMPONENT_EXPORT_PATTERNS.some((pattern) => pattern.test(line));
+  });
+}
+function isNextRouteFile(fileLabel) {
+  return NEXT_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, "/"));
+}
+function getBaseName(fileLabel) {
+  const normalized = fileLabel.replace(/\\/g, "/");
+  const fileName = normalized.split("/").pop() ?? normalized;
+  return fileName.split(".")[0];
+}
+function analyzeFileNaming(lines, fileLabel, findings) {
+  const baseName = getBaseName(fileLabel);
+  if (isNextRouteFile(fileLabel)) {
+    if (!matchesCase(baseName, "kebab-case")) {
+      findings.push(fileLabel + " - El archivo " + baseName + " no usa kebab-case");
+    }
+    return;
+  }
+  if (fileExportsComponent(lines)) {
+    if (!matchesCase(baseName, "PascalCase")) {
+      findings.push(fileLabel + " - El archivo " + baseName + " (componente) no usa PascalCase");
+    }
+    return;
+  }
+  if (!matchesCase(baseName, "camelCase")) {
+    findings.push(fileLabel + " - El archivo " + baseName + " no usa camelCase");
+  }
+}
+
+// src/analyzers/style/cssClassNamingAnalyzer.ts
+var CSS_CLASS_SELECTOR_PATTERN = /\.([A-Za-z_-][A-Za-z0-9_-]*)(?=[\s,:{]|$)/g;
+var HTML_CLASS_ATRIBUTE_PATTERN = /class(?:Name)?\s*=\s*(?:"([^"]*)"|'([^']*)')/g;
+function reportIfInvalid(name, fileLabel, findings) {
+  if (!matchesCase(name, "kebab-case")) {
+    findings.push(fileLabel + " - La clase " + name + " no usa kebab-case");
+  }
+}
+function analyzeCssFile(lines, fileLabel, findings) {
+  lines.forEach((line) => {
+    CSS_CLASS_SELECTOR_PATTERN.lastIndex = 0;
+    let match2;
+    while ((match2 = CSS_CLASS_SELECTOR_PATTERN.exec(line)) !== null) {
+      reportIfInvalid(match2[1], fileLabel, findings);
+    }
+  });
+}
+function analyzeHtmlFile(lines, fileLabel, findings) {
+  lines.forEach((line) => {
+    HTML_CLASS_ATRIBUTE_PATTERN.lastIndex = 0;
+    let match2;
+    while ((match2 = HTML_CLASS_ATRIBUTE_PATTERN.exec(line)) !== null) {
+      const classValue = match2[1] ?? match2[2] ?? "";
+      classValue.split(/\s+/).filter((name) => name.length > 0).forEach((name) => {
+        reportIfInvalid(name, fileLabel, findings);
+      });
+    }
+  });
+}
+function analyzeCssClassNaming(lines, languageId, fileLabel, findings) {
+  if (languageId === "css") {
+    analyzeCssFile(lines, fileLabel, findings);
+  } else {
+    analyzeHtmlFile(lines, fileLabel, findings);
+  }
+}
+
 // src/commands/codeReviewerCommand.ts
 function getChangedFile(workspaceRoot, baseBranch) {
   try {
@@ -4104,6 +4199,7 @@ function registerCodeReviewerCommand(context) {
     const changedPaths = getChangedFile(folder.uri.fsPath, baseBranch);
     const codeFiles = changedPaths.filter((path3) => /\.(ts|tsx|js|jsx|php|cs)$/.test(path3)).filter((path3) => !isExluded(path3, excludeMatchers)).map((path3) => vscode3.Uri.joinPath(folder.uri, path3));
     const envFiles = changedPaths.filter((path3) => /(^|\/)\.env/.test(path3)).filter((path3) => !isExluded(path3, excludeMatchers)).map((path3) => vscode3.Uri.joinPath(folder.uri, path3));
+    const htmlCssFiles = changedPaths.filter((path3) => /\.(html|css|jsx|tsx)$/.test(path3)).filter((path3) => !isExluded(path3, excludeMatchers)).map((path3) => vscode3.Uri.joinPath(folder.uri, path3));
     const fileLines = /* @__PURE__ */ new Map();
     const changedLinesByFile = /* @__PURE__ */ new Map();
     for (const uri of codeFiles) {
@@ -4151,6 +4247,9 @@ function registerCodeReviewerCommand(context) {
       if (languageId) {
         analyzeNaming(lines, languageId, fileLabel, findings);
       }
+      if (config.rules.fileNaming.enabled) {
+        analyzeFileNaming(lines, fileLabel, findings);
+      }
     }
     const folderPaths = await collectFolderPaths(folder.uri, excludeMatchers);
     if (config.rules.interfaces.enabled) {
@@ -4168,6 +4267,16 @@ function registerCodeReviewerCommand(context) {
       const lines = Buffer.from(bytes).toString("utf8").split("\n");
       if (config.rules.envNaming.enabled) {
         analyzeEnvVariables(lines, fileLabel, findings);
+      }
+    }
+    for (const uri of htmlCssFiles) {
+      const fileLabel = vscode3.workspace.asRelativePath(uri);
+      const bytes = await vscode3.workspace.fs.readFile(uri);
+      const lines = Buffer.from(bytes).toString("utf8").split("\n");
+      const extension = fileLabel.split(".").pop();
+      const classLenguage = extension === "css" ? "css" : "html";
+      if (config.rules.cssClassNaming.enabled && (extension === "html" || extension === "css" || extension === "jsx" || extension === "tsx")) {
+        analyzeCssClassNaming(lines, classLenguage, fileLabel, findings);
       }
     }
     async function collectFolderPaths(uri, excludedNames) {

@@ -18,6 +18,12 @@ function startsWithUpperCase(name: string): boolean {
 	return /^[A-Z]/.test(name);
 }
 
+const HOOK_NAME_PATTERN = /^use[A-Z]/;
+
+function isHookName(name: string): boolean {
+	return HOOK_NAME_PATTERN.test(name);
+}
+
 //tipo de dato que agrupa los 5 arreglo de nombres encontrados en el documento
 interface ExtractedNames {
 	classNames: string[];
@@ -26,6 +32,7 @@ interface ExtractedNames {
 	variableNames: string[];
 	constantNames: string[];
 	componentNames: string[];
+	hookNames: string[];
 }
 
 // Recorre el documento llevando la profundidad de llaves para saber si una linea
@@ -37,6 +44,7 @@ function extractNamesByCategory(lines: string[], config: LanguageNamingConfig): 
 	const variableNames: string[] = [];
 	const constantNames: string[] = [];
 	const componentNames: string[] = [];
+	const hookNames: string[] = [];
 
 	let braceDepth = 0; // contador de profundidad de llaves
 	const classOuterDepths: number[] = []; //array con la profundidad en la que vive cada clase abierta
@@ -73,7 +81,9 @@ function extractNamesByCategory(lines: string[], config: LanguageNamingConfig): 
 		} else { //si no estamos dentro de una clase se prueba el patron de funcion suelta
 			const functionMatch = matchFirstGroup(trimmed, config.functionPatterns);
 			if (functionMatch) {
-				if (config.componentCase && startsWithUpperCase(functionMatch)) {
+				if (config.componentCase && isHookName(functionMatch)) {
+					hookNames.push(functionMatch);
+			    }else if (config.componentCase && startsWithUpperCase(functionMatch)) {
 					componentNames.push(functionMatch);
 				} else {
 					functionNames.push(functionMatch);
@@ -90,7 +100,9 @@ function extractNamesByCategory(lines: string[], config: LanguageNamingConfig): 
 		//prueba los regex de constantes y si matchea guarda el nombre
 		const constantMatch = matchFirstGroup(trimmed, config.constantPatterns);
 		if (constantMatch) {
-			if (config.componentCase && startsWithUpperCase(constantMatch)) {
+			if (config.componentCase && isHookName(constantMatch)) {
+				hookNames.push(constantMatch);
+			}else if (config.componentCase && startsWithUpperCase(constantMatch)) {
 				componentNames.push(constantMatch);
 			} else {
 				constantNames.push(constantMatch);
@@ -113,7 +125,7 @@ function extractNamesByCategory(lines: string[], config: LanguageNamingConfig): 
 		}
 	}
 
-	return { classNames, functionNames, methodNames, variableNames, constantNames, componentNames };
+	return { classNames, functionNames, methodNames, variableNames, constantNames, componentNames, hookNames };
 }
 
 //Si un nombre no cumple con CaseStyle agrega el hallazgo al arreglo de resultados del archivo
@@ -134,7 +146,7 @@ export function analyzeNaming(lines: string[], languageId: string, fileLabel: st
 	}
 
 	//llama a extractNamesByCategory para sacar los 5 arreglos de nombres
-	const { classNames, functionNames, methodNames, variableNames, constantNames, componentNames } = extractNamesByCategory(lines, namingConfig);
+	const { classNames, functionNames, methodNames, variableNames, constantNames, componentNames, hookNames } = extractNamesByCategory(lines, namingConfig);
 
 	//se llama a esta funcion una vez por categoria usando el CaseStyle que le corresponde a cada uno
 	reportInvalidNames(classNames, namingConfig.classCase, 'La clase', fileLabel, findings);
@@ -143,6 +155,7 @@ export function analyzeNaming(lines: string[], languageId: string, fileLabel: st
 	reportInvalidNames(variableNames, namingConfig.variableCase, 'La variable', fileLabel, findings);
 	reportInvalidNames(constantNames, namingConfig.constantCase, 'La constante', fileLabel, findings);
 	if (namingConfig.componentCase) {
-		reportInvalidNames(componentNames, namingConfig.componentCase, 'El componente', fileLabel, findings)
+		reportInvalidNames(componentNames, namingConfig.componentCase, 'El componente', fileLabel, findings);
+		reportInvalidNames(hookNames, namingConfig.functionCase, 'El hook', fileLabel, findings);
 	}
 }
