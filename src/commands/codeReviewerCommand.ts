@@ -20,6 +20,8 @@ import { analyzeInterfaceContracts } from '../analyzers/structure/interfaceContr
 import { analyzeLayeredStructure } from '../analyzers/structure/layeredStructureAnalyzer';
 import { Minimatch } from 'minimatch';
 import { analyzeDuplicateCode } from '../analyzers/structure/duplicateCodeAnalyzer';
+import { analyzeFileNaming } from '../analyzers/style/fileNamingAnalyzer';
+import { analyzeCssClassNaming } from '../analyzers/style/cssClassNamingAnalyzer';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -74,6 +76,11 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			.filter (path => !isExluded(path, excludeMatchers))
 			.map(path => vscode.Uri.joinPath(folder.uri, path));
 
+		const htmlCssFiles = changedPaths
+			.filter(path => /\.(html|css|jsx|tsx)$/.test(path))
+			.filter(path => !isExluded(path, excludeMatchers))
+			.map(path => vscode.Uri.joinPath(folder.uri, path));
+
 		// Se guardan las lineas de cada archivo para los analisis que necesitan ver todo el proyecto a la vez
 		const fileLines = new Map<string, string[]>();
 		const changedLinesByFile = new Map<string, Set<number>>();
@@ -122,6 +129,11 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			if (languageId) {
 				analyzeNaming(lines, languageId, fileLabel, findings);
 			}
+
+			if (config.rules.fileNaming.enabled) {
+				analyzeFileNaming(lines, fileLabel, findings);
+			}
+
 		}
 
 		// --------------------------------------------------------------------------------------
@@ -150,6 +162,21 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 			if(config.rules.envNaming.enabled) {
 				analyzeEnvVariables(lines, fileLabel, findings);
+			}
+		}
+
+		//----------------------------------------------------------------------------------------
+		// ---- CLASES EN HTML/CSS ---------------------------------------------------------------
+
+		for (const uri of htmlCssFiles) {
+			const fileLabel = vscode.workspace.asRelativePath(uri);
+			const bytes =  await vscode.workspace.fs.readFile(uri);
+			const lines = Buffer.from(bytes).toString('utf8').split('\n');
+			const extension = fileLabel.split('.').pop();
+			const classLenguage = extension === 'css' ? 'css' : 'html'; 
+
+			if (config.rules.cssClassNaming.enabled && (extension === 'html' || extension === 'css' || extension === 'jsx' || extension === 'tsx')) {
+				analyzeCssClassNaming(lines, classLenguage, fileLabel, findings);
 			}
 		}
 

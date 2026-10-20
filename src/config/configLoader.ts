@@ -88,6 +88,8 @@ export interface CodeAdvisorConfig {
         exceptionHandling: RuleToggle;
         naming: RuleToggle;
         envNaming: RuleToggle;
+        fileNaming: RuleToggle;
+        cssClassNaming: RuleToggle;
         duplicateCode: DuplicateCodeConfig;
     };
 }
@@ -156,6 +158,8 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
         exceptionHandling: { enabled: true },
         naming: { enabled: true },
         envNaming: { enabled: true },
+        fileNaming: { enabled: true },
+        cssClassNaming: { enabled: true },
     },
 };
 
