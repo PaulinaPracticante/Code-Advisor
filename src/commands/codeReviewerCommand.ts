@@ -22,6 +22,7 @@ import { Minimatch } from 'minimatch';
 import { analyzeDuplicateCode } from '../analyzers/structure/duplicateCodeAnalyzer';
 import { analyzeFileNaming } from '../analyzers/style/fileNamingAnalyzer';
 import { analyzeCssClassNaming } from '../analyzers/style/cssClassNamingAnalyzer';
+import { analyzeRequestHandlers } from '../analyzers/structure/requestHandlerAnalyzer';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -115,6 +116,10 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 			if (config.rules.objectUsage.enabled) {
 				analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage);
+			}
+
+			if (config.rules.requestHandlers.enabled) {
+				analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers);
 			}
 
 			if (config.rules.indentation.enabled) { analyzeIndentation(lines, fileLabel, findings, changedLines); }

@@ -1958,6 +1958,13 @@ var DEFAULT_CONFIG = {
       minLines: 5,
       minOccurrences: 2
     },
+    requestHandlers: {
+      enabled: true,
+      next: { expected: "fetch" },
+      react: { expected: "axios" },
+      reactNative: { expected: "axios" },
+      legacyJs: { expected: "fetch" }
+    },
     indentation: { enabled: true },
     ifBraces: { enabled: true },
     ternaries: { enabled: true },
@@ -4170,6 +4177,106 @@ function analyzeCssClassNaming(lines, languageId, fileLabel, findings) {
   }
 }
 
+// src/analyzers/structure/requestHandlerAnalyzer.ts
+var NEXT_IMPORT_PATTERN = /from\s+['"]next(?:\/[^'"]*)?['"]/;
+var REACT_NATIVE_IMPORT_PATTERN = /from\s+['"]react-native['"]/;
+var REACT_IMPORT_PATTERN = /from\s+['"]react['"]/;
+var JQUERY_SIGNAL_PATTERN = /from\s+['"]jquery['"]|\s$\..(ajax|get|post|getJSON)\s*\(/;
+var FETCH_CALL_PATTERN = /\bfetch\s*\(/;
+var AXIOS_CALL_PATTERN = /\baxios(?:\.\w+)?\s*\(/;
+var JQUERY_CALL_PATTERN = /\$\.(ajax|get|post|getJSON)\s*\(/;
+var XHR_PATTERN = /\bnew\s+XMLHttpRequest\s*\(/;
+var PHP_CURL_PATTERN = /\bcurl_init\s*\(/;
+var PHP_FILE_GET_CONTENTS_PATTERN = /\bfile_get_contents\s*\(\s*['"]https?:/;
+var PHP_GUZZLE_PATTERN = /GuzzleHttp|->\s*(get|post|request)Async?\s*\(/;
+function stripLineComment9(rawLine) {
+  const commentIndex = rawLine.indexOf("//");
+  return commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex);
+}
+function detectJsContext(lines) {
+  const content = lines.join("\n");
+  if (NEXT_IMPORT_PATTERN.test(content)) {
+    return "next";
+  }
+  if (REACT_NATIVE_IMPORT_PATTERN.test(content)) {
+    return "reactNative";
+  }
+  if (JQUERY_SIGNAL_PATTERN.test(content)) {
+    return "legacyJs";
+  }
+  if (REACT_IMPORT_PATTERN.test(content)) {
+    return "react";
+  }
+  return null;
+}
+function expectedHandlerFor(context, config) {
+  switch (context) {
+    case "next":
+      return config.next.expected;
+    case "reactNative":
+      return config.reactNative.expected;
+    case "legacyJs":
+      return config.legacyJs.expected;
+    case "php":
+      return config.legacyJs.expected;
+    case "react":
+      return config.react.expected;
+  }
+}
+var CONTEXT_LABELS = {
+  next: "Next.js",
+  react: "React",
+  reactNative: "React Native",
+  legacyJs: "jQuery",
+  php: "PHP"
+};
+function reportLine(rawLine, lineNumber, fileLabel, context, expected, findings) {
+  const line = stripLineComment9(rawLine);
+  const where = fileLabel + ":" + lineNumber;
+  let found = null;
+  if (FETCH_CALL_PATTERN.test(line)) {
+    found = "fetch";
+  } else if (AXIOS_CALL_PATTERN.test(line)) {
+    found = "axios";
+  } else if (JQUERY_CALL_PATTERN.test(line)) {
+    found = "jQuery";
+  } else if (XHR_PATTERN.test(line)) {
+    found = "XMLHttpRequest";
+  } else if (PHP_CURL_PATTERN.test(line)) {
+    found = "cURL";
+  } else if (PHP_FILE_GET_CONTENTS_PATTERN.test(line)) {
+    found = "file_get_contents";
+  } else if (PHP_GUZZLE_PATTERN.test(line)) {
+    found = "Guzzle";
+  }
+  if (found && found.toLowerCase() !== expected) {
+    findings.push(where + " - en este contexto (" + CONTEXT_LABELS[context] + ') se debe usar "' + expected + '"; se encontro "' + found + '"');
+  }
+}
+function analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config) {
+  if (fileLabel.endsWith(".php")) {
+    const expected2 = expectedHandlerFor("php", config);
+    lines.forEach((rawLine, i) => {
+      if (!changedLines.has(i + 1)) {
+        return;
+      }
+      reportLine(rawLine, i + 1, fileLabel, "php", expected2, findings);
+    });
+    return;
+  }
+  const context = detectJsContext(lines);
+  if (!context) {
+    return;
+  }
+  const expected = expectedHandlerFor(context, config);
+  lines.forEach((rawLine, i) => {
+    if (!changedLines.has(i + 1)) {
+      return;
+    }
+    reportLine(rawLine, i + 1, fileLabel, context, expected, findings);
+  });
+}
+
 // src/commands/codeReviewerCommand.ts
 function getChangedFile(workspaceRoot, baseBranch) {
   try {
@@ -4223,6 +4330,9 @@ function registerCodeReviewerCommand(context) {
       }
       if (config.rules.objectUsage.enabled) {
         analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage);
+      }
+      if (config.rules.requestHandlers.enabled) {
+        analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers);
       }
       if (config.rules.indentation.enabled) {
         analyzeIndentation(lines, fileLabel, findings, changedLines);

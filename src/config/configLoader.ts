@@ -68,6 +68,17 @@ export interface DuplicateCodeConfig extends RuleToggle {
     minOccurrences: number;
 }
 
+export interface RequestHandlerContextConfig {
+    expected: 'fetch' | 'axios';
+}
+
+export interface RequestHnadlersConfig extends RuleToggle {
+    next: RequestHandlerContextConfig;
+    react: RequestHandlerContextConfig;
+    reactNative: RequestHandlerContextConfig;
+    legacyJs: RequestHandlerContextConfig;
+}
+
 // reglas que todavia no tienen parametros propios configurables, solo enabled/disabled
 export interface CodeAdvisorConfig {
     exclude: string[];
@@ -91,6 +102,7 @@ export interface CodeAdvisorConfig {
         fileNaming: RuleToggle;
         cssClassNaming: RuleToggle;
         duplicateCode: DuplicateCodeConfig;
+        requestHandlers: RequestHnadlersConfig;
     };
 }
 
@@ -148,6 +160,13 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
             enabled: true,
             minLines: 5,
             minOccurrences: 2,
+        },
+        requestHandlers: {
+            enabled: true,
+            next: { expected: 'fetch' },
+            react: { expected: 'axios' },
+            reactNative: { expected: 'axios' },
+            legacyJs: { expected: 'fetch' },
         },
         indentation: { enabled: true },
         ifBraces: { enabled: true },
