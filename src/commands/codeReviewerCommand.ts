@@ -23,6 +23,7 @@ import { analyzeDuplicateCode } from '../analyzers/structure/duplicateCodeAnalyz
 import { analyzeFileNaming } from '../analyzers/style/fileNamingAnalyzer';
 import { analyzeCssClassNaming } from '../analyzers/style/cssClassNamingAnalyzer';
 import { analyzeRequestHandlers } from '../analyzers/structure/requestHandlerAnalyzer';
+import { analyzeComponentLocation } from '../analyzers/structure/componentLocationAnalyzer';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -137,6 +138,10 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 			if (config.rules.fileNaming.enabled) {
 				analyzeFileNaming(lines, fileLabel, findings);
+			}
+
+			if (config.rules.componentLocation.enabled) {
+				analyzeComponentLocation(lines, fileLabel, findings, config.rules.componentLocation);
 			}
 
 		}
