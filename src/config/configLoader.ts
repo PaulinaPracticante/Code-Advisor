@@ -79,6 +79,12 @@ export interface RequestHnadlersConfig extends RuleToggle {
     legacyJs: RequestHandlerContextConfig;
 }
 
+export interface ComponentLocationConfig extends RuleToggle {
+    folders: string[];
+    exemptFolders: string[];
+    exemptFiles: string[];
+}
+
 // reglas que todavia no tienen parametros propios configurables, solo enabled/disabled
 export interface CodeAdvisorConfig {
     exclude: string[];
@@ -103,6 +109,7 @@ export interface CodeAdvisorConfig {
         cssClassNaming: RuleToggle;
         duplicateCode: DuplicateCodeConfig;
         requestHandlers: RequestHnadlersConfig;
+        componentLocation: ComponentLocationConfig;
     };
 }
 
@@ -167,6 +174,12 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
             react: { expected: 'axios' },
             reactNative: { expected: 'axios' },
             legacyJs: { expected: 'fetch' },
+        },
+        componentLocation: {
+            enabled: true,
+            folders: ['component', 'components'],
+            exemptFolders: ['app', 'pages', 'screens', 'views'],
+            exemptFiles: ['App', 'main', 'index', '_app', '_document'],
         },
         indentation: { enabled: true },
         ifBraces: { enabled: true },

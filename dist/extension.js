@@ -1965,6 +1965,12 @@ var DEFAULT_CONFIG = {
       reactNative: { expected: "axios" },
       legacyJs: { expected: "fetch" }
     },
+    componentLocation: {
+      enabled: true,
+      folders: ["component", "components"],
+      exemptFolders: ["app", "pages", "screens", "views"],
+      exemptFiles: ["App", "main", "index", "_app", "_document"]
+    },
     indentation: { enabled: true },
     ifBraces: { enabled: true },
     ternaries: { enabled: true },
@@ -4277,6 +4283,61 @@ function analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config
   });
 }
 
+// src/shared/componentDetection.ts
+var COMPONENT_EXPORT_PATTERNS2 = [
+  /^export\s+default\s+function\s+([A-Z][A-Za-z0-9_]*)/,
+  /^export\s+default\s+([A-Z][A-Za-z0-9_]*)\s*;?\s*$/,
+  /^export\s+(?:default\s+)?function\s+([A-Z][A-Za-z0-9_]*)/,
+  /^export\s+(?:default\s+)?const\s+([A-Z][A-Za-z0-9_]*)\s*(?::|=)/,
+  /^function\s+([A-Z][A-Za-z0-9_]*)/,
+  /^const\s+([A-Z][A-Za-z0-9_]*)\s*(?::|=)/
+];
+function fileExportsComponent2(lines) {
+  return lines.some((rawLine) => {
+    const commentIndex = rawLine.indexOf("//");
+    const line = (commentIndex === -1 ? rawLine : rawLine.slice(0, commentIndex)).trim();
+    return COMPONENT_EXPORT_PATTERNS2.some((pattern) => pattern.test(line));
+  });
+}
+
+// src/analyzers/structure/componentLocationAnalyzer.ts
+var COMPONENT_EXTENSION_PATTERN = /\.(jsx|tsx|js|ts)$/;
+var JSX_RETURN_PATTERN = /return\s*\(?\s*<[A-Za-z>]/;
+var TEST_FILE_PATTERN = /\.(test|spec|stories)\.(jsx|tsx|js|ts)$/;
+function splitPath(fileLabel) {
+  const parts = fileLabel.replace(/\\/g, "/").split("/");
+  const fileName = parts.pop() ?? "";
+  return { folders: parts.map((part) => part.toLowerCase()), baseName: fileName.split(".")[0] };
+}
+function isComponentFile(lines, filelabel) {
+  if (!COMPONENT_EXTENSION_PATTERN.test(filelabel) || TEST_FILE_PATTERN.test(filelabel)) {
+    return false;
+  }
+  if (!fileExportsComponent2(lines)) {
+    return false;
+  }
+  if (/\.(jsx|tsx)$/.test(filelabel)) {
+    return true;
+  }
+  return JSX_RETURN_PATTERN.test(lines.join("\n"));
+}
+function analyzeComponentLocation(lines, fileLabel, findings, config) {
+  if (!isComponentFile(lines, fileLabel)) {
+    return;
+  }
+  const { folders, baseName } = splitPath(fileLabel);
+  if (config.exemptFiles.includes(baseName)) {
+    return;
+  }
+  if (folders.some((folder) => config.exemptFolders.includes(folder))) {
+    return;
+  }
+  const isInComponentFolder = folders.some((folders2) => config.folders.includes(folders2));
+  if (!isInComponentFolder) {
+    findings.push(fileLabel + " - El componente " + baseName + " debe estar dentro de una carpeta " + config.folders.join("/"));
+  }
+}
+
 // src/commands/codeReviewerCommand.ts
 function getChangedFile(workspaceRoot, baseBranch) {
   try {
@@ -4359,6 +4420,9 @@ function registerCodeReviewerCommand(context) {
       }
       if (config.rules.fileNaming.enabled) {
         analyzeFileNaming(lines, fileLabel, findings);
+      }
+      if (config.rules.componentLocation.enabled) {
+        analyzeComponentLocation(lines, fileLabel, findings, config.rules.componentLocation);
       }
     }
     const folderPaths = await collectFolderPaths(folder.uri, excludeMatchers);
