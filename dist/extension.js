@@ -4122,6 +4122,16 @@ function fileExportsComponent(lines) {
 function isNextRouteFile(fileLabel) {
   return NEXT_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, "/"));
 }
+var CONTROLLERS_ROUTE_FOLDER_PATTERN = /(^|\/)(?:PKT1_WEB2\/)?(?:application\/)?(?:controllers)\//;
+var CONTROLLERS_NAME_PATTERN = /^Cat[A-Z][A-Za-z0-9]*$/;
+function isControllerRouteFile(fileLabel) {
+  return CONTROLLERS_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, "/"));
+}
+var MODEL_ROUTE_FOLDER_PATTERN = /(^|\/)(?:PKT1_WEB2\/)?(?:application\/)?(?:models)\//;
+var MODEL_NAME_PATTERN = /^[A-Z][A-Za-z0-9]*Model$/;
+function isModelRouteFile(fileLabel) {
+  return MODEL_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, "/"));
+}
 function getBaseName(fileLabel) {
   const normalized = fileLabel.replace(/\\/g, "/");
   const fileName = normalized.split("/").pop() ?? normalized;
@@ -4143,6 +4153,16 @@ function analyzeFileNaming(lines, fileLabel, findings) {
   }
   if (!matchesCase(baseName, "camelCase")) {
     findings.push(fileLabel + " - El archivo " + baseName + " no usa camelCase");
+  }
+  if (!isControllerRouteFile(fileLabel)) {
+    if (CONTROLLERS_NAME_PATTERN.test(baseName)) {
+      findings.push(fileLabel + " - El archivo " + baseName + " no inicia con Cat");
+    }
+  }
+  if (!isModelRouteFile(fileLabel)) {
+    if (MODEL_NAME_PATTERN.test(baseName)) {
+      findings.push(fileLabel + " - El archivo " + baseName + " no tiene Model en el nombre");
+    }
   }
 }
 

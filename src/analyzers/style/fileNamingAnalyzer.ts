@@ -4,6 +4,10 @@
 
 import { matchesCase } from "../../config/namingConfig";
 
+
+// ---------------------------------------------------------------------------------------
+// ---- VERFICACION DE ARCHIVO NEXT ------------------------------------------------------
+
 //detecta si la ruta del archivo cae dentro de una carpeta de rutas next (pages o app)
 const NEXT_ROUTE_FOLDER_PATTERN = /(^|\/)(?:src\/)?(?:pages|app)\//;
 
@@ -32,6 +36,27 @@ function isNextRouteFile(fileLabel: string): boolean {
     return NEXT_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, '/'));
 }
 
+// ---------------------------------------------------------------------------------------
+// ----VERIFICACION DE NOMBRE DE CONTROLADORES--------------------------------------------
+
+const CONTROLLERS_ROUTE_FOLDER_PATTERN = /(^|\/)(?:PKT1_WEB2\/)?(?:application\/)?(?:controllers)\//;
+const CONTROLLERS_NAME_PATTERN = /^Cat[A-Z][A-Za-z0-9]*$/;
+
+function isControllerRouteFile(fileLabel: string): boolean {
+    return CONTROLLERS_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, '/'));
+}
+
+// ---------------------------------------------------------------------------------------
+// ----VERIFICACION DE NOMBRE DE MODELOS--------------------------------------------------
+
+const MODEL_ROUTE_FOLDER_PATTERN = /(^|\/)(?:PKT1_WEB2\/)?(?:application\/)?(?:models)\//;
+const MODEL_NAME_PATTERN = /^[A-Z][A-Za-z0-9]*Model$/;
+
+function isModelRouteFile(fileLabel: string): boolean {
+    return MODEL_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, '/'));
+}
+
+
 //saca el nombre del archivo sin carpetas ni extension 
 function getBaseName(fileLabel: string): string {
     const normalized = fileLabel.replace(/\\/g, '/'); //normaliza las barras 
@@ -59,5 +84,17 @@ export function analyzeFileNaming(lines: string[], fileLabel: string, findings: 
 
     if (!matchesCase(baseName, 'camelCase')) {
         findings.push(fileLabel + ' - El archivo ' + baseName + ' no usa camelCase');
+    }
+
+    if (!isControllerRouteFile(fileLabel)) {
+        if (CONTROLLERS_NAME_PATTERN.test(baseName)) {
+            findings.push(fileLabel + ' - El archivo ' + baseName + ' no inicia con Cat')
+        }
+    }
+
+    if (!isModelRouteFile(fileLabel)) {
+        if (MODEL_NAME_PATTERN.test(baseName)) {
+            findings.push(fileLabel + ' - El archivo ' + baseName + ' no tiene Model en el nombre')
+        }
     }
 }
