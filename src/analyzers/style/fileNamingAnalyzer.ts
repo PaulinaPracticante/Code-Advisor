@@ -4,6 +4,10 @@
 
 import { matchesCase } from "../../config/namingConfig";
 
+
+// ---------------------------------------------------------------------------------------
+// ---- VERFICACION DE ARCHIVO NEXT ------------------------------------------------------
+
 //detecta si la ruta del archivo cae dentro de una carpeta de rutas next (pages o app)
 const NEXT_ROUTE_FOLDER_PATTERN = /(^|\/)(?:src\/)?(?:pages|app)\//;
 
@@ -32,6 +36,31 @@ function isNextRouteFile(fileLabel: string): boolean {
     return NEXT_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, '/'));
 }
 
+// ---------------------------------------------------------------------------------------
+// ----VERIFICACION DE NOMBRE DE CONTROLADORES--------------------------------------------
+
+//las reglas de controladores y modelos solo aplican en el repo PKT1_WEB2
+const PKT1_WEB2_REPO_NAME = 'PKT1_WEB2';
+
+//la ruta es relativa a la raiz del repo (asRelativePath no incluye el nombre del repo)
+const CONTROLLERS_ROUTE_FOLDER_PATTERN = /^PKT1\/application\/controllers\//;
+const CONTROLLERS_NAME_PATTERN = /^Cat[A-Z][A-Za-z0-9]*$/;
+
+function isControllerRouteFile(fileLabel: string): boolean {
+    return CONTROLLERS_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, '/'));
+}
+
+// ---------------------------------------------------------------------------------------
+// ----VERIFICACION DE NOMBRE DE MODELOS--------------------------------------------------
+
+const MODEL_ROUTE_FOLDER_PATTERN = /^PKT1\/application\/models\//;
+const MODEL_NAME_PATTERN = /^[A-Z][A-Za-z0-9]*Model$/;
+
+function isModelRouteFile(fileLabel: string): boolean {
+    return MODEL_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, '/'));
+}
+
+
 //saca el nombre del archivo sin carpetas ni extension 
 function getBaseName(fileLabel: string): string {
     const normalized = fileLabel.replace(/\\/g, '/'); //normaliza las barras 
@@ -40,8 +69,24 @@ function getBaseName(fileLabel: string): string {
 }
 
 // funcion principal 
-export function analyzeFileNaming(lines: string[], fileLabel: string, findings: string[]): void {
+export function analyzeFileNaming(lines: string[], fileLabel: string, findings: string[], repoName: string): void {
     const baseName = getBaseName(fileLabel);
+
+    if (repoName === PKT1_WEB2_REPO_NAME) {
+        if (isControllerRouteFile(fileLabel)) {
+            if (!CONTROLLERS_NAME_PATTERN.test(baseName)) {
+                findings.push(fileLabel + ' - El archivo ' + baseName + ' (controlador) no sigue el formato CatNombre');
+            }
+            return;
+        }
+
+        if (isModelRouteFile(fileLabel)) {
+            if (!MODEL_NAME_PATTERN.test(baseName)) {
+                findings.push(fileLabel + ' - El archivo ' + baseName + ' (modelo) no sigue el formato NombreModel');
+            }
+            return;
+        }
+    }
 
     if (isNextRouteFile(fileLabel)) {
         if (!matchesCase(baseName, 'kebab-case')) {
