@@ -4122,12 +4122,13 @@ function fileExportsComponent(lines) {
 function isNextRouteFile(fileLabel) {
   return NEXT_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, "/"));
 }
-var CONTROLLERS_ROUTE_FOLDER_PATTERN = /(^|\/)(?:PKT1_WEB2\/)?(?:application\/)?(?:controllers)\//;
+var PKT1_WEB2_REPO_NAME = "PKT1_WEB2";
+var CONTROLLERS_ROUTE_FOLDER_PATTERN = /^PKT1\/application\/controllers\//;
 var CONTROLLERS_NAME_PATTERN = /^Cat[A-Z][A-Za-z0-9]*$/;
 function isControllerRouteFile(fileLabel) {
   return CONTROLLERS_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, "/"));
 }
-var MODEL_ROUTE_FOLDER_PATTERN = /(^|\/)(?:PKT1_WEB2\/)?(?:application\/)?(?:models)\//;
+var MODEL_ROUTE_FOLDER_PATTERN = /^PKT1\/application\/models\//;
 var MODEL_NAME_PATTERN = /^[A-Z][A-Za-z0-9]*Model$/;
 function isModelRouteFile(fileLabel) {
   return MODEL_ROUTE_FOLDER_PATTERN.test(fileLabel.replace(/\\/g, "/"));
@@ -4137,8 +4138,22 @@ function getBaseName(fileLabel) {
   const fileName = normalized.split("/").pop() ?? normalized;
   return fileName.split(".")[0];
 }
-function analyzeFileNaming(lines, fileLabel, findings) {
+function analyzeFileNaming(lines, fileLabel, findings, repoName) {
   const baseName = getBaseName(fileLabel);
+  if (repoName === PKT1_WEB2_REPO_NAME) {
+    if (isControllerRouteFile(fileLabel)) {
+      if (!CONTROLLERS_NAME_PATTERN.test(baseName)) {
+        findings.push(fileLabel + " - El archivo " + baseName + " (controlador) no sigue el formato CatNombre");
+      }
+      return;
+    }
+    if (isModelRouteFile(fileLabel)) {
+      if (!MODEL_NAME_PATTERN.test(baseName)) {
+        findings.push(fileLabel + " - El archivo " + baseName + " (modelo) no sigue el formato NombreModel");
+      }
+      return;
+    }
+  }
   if (isNextRouteFile(fileLabel)) {
     if (!matchesCase(baseName, "kebab-case")) {
       findings.push(fileLabel + " - El archivo " + baseName + " no usa kebab-case");
@@ -4153,16 +4168,6 @@ function analyzeFileNaming(lines, fileLabel, findings) {
   }
   if (!matchesCase(baseName, "camelCase")) {
     findings.push(fileLabel + " - El archivo " + baseName + " no usa camelCase");
-  }
-  if (!isControllerRouteFile(fileLabel)) {
-    if (CONTROLLERS_NAME_PATTERN.test(baseName)) {
-      findings.push(fileLabel + " - El archivo " + baseName + " no inicia con Cat");
-    }
-  }
-  if (!isModelRouteFile(fileLabel)) {
-    if (MODEL_NAME_PATTERN.test(baseName)) {
-      findings.push(fileLabel + " - El archivo " + baseName + " no tiene Model en el nombre");
-    }
   }
 }
 
@@ -4358,6 +4363,42 @@ function analyzeComponentLocation(lines, fileLabel, findings, config) {
   }
 }
 
+// src/analyzers/structure/folderNamingAnalyzer.ts
+var MANAGEMENT_VIEW2_REPO_NAME = "ManagementView_v2";
+var MANAGMENT_VIEW2_REQUIRED_FOLDERS = [
+  "public",
+  "public/assets",
+  "src",
+  "src/api/auth",
+  "src/api/customers",
+  "src/api/dashboard",
+  "src/api/shipments",
+  "src/shared/components"
+];
+function normalizePath(folderPath) {
+  return folderPath.replace(/\\/g, "/");
+}
+function getFolderName(folderPath) {
+  return folderPath.split("/").pop() ?? folderPath;
+}
+function analyzeFolderStructure(folderPaths, repoName, findings) {
+  if (repoName !== MANAGEMENT_VIEW2_REPO_NAME) {
+    return;
+  }
+  const normalizedPaths = folderPaths.map(normalizePath);
+  for (const requiredFolder of MANAGMENT_VIEW2_REQUIRED_FOLDERS) {
+    const actualPath = normalizedPaths.find((folderPaths2) => folderPaths2.toLocaleLowerCase() === requiredFolder.toLocaleLowerCase());
+    if (!actualPath) {
+      findings.push('Estructura del proyecto - No se encontro la carpeta "' + requiredFolder + '"');
+      continue;
+    }
+    const folderName = getFolderName(actualPath);
+    if (!matchesCase(folderName, "PascalCase")) {
+      findings.push(actualPath + " - La carpeta " + folderName + " no usa PascalCase");
+    }
+  }
+}
+
 // src/commands/codeReviewerCommand.ts
 function getChangedFile(workspaceRoot, baseBranch) {
   try {
@@ -4439,13 +4480,14 @@ function registerCodeReviewerCommand(context) {
         analyzeNaming(lines, languageId, fileLabel, findings);
       }
       if (config.rules.fileNaming.enabled) {
-        analyzeFileNaming(lines, fileLabel, findings);
+        analyzeFileNaming(lines, fileLabel, findings, folder.name);
       }
       if (config.rules.componentLocation.enabled) {
         analyzeComponentLocation(lines, fileLabel, findings, config.rules.componentLocation);
       }
     }
     const folderPaths = await collectFolderPaths(folder.uri, excludeMatchers);
+    analyzeFolderStructure(folderPaths, folder.name, findings);
     if (config.rules.interfaces.enabled) {
       await analyzeInterfaceContracts(fileLines, folder.uri, excludePattern, findings, config.rules.interfaces);
     }
