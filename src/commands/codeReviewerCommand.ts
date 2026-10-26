@@ -24,6 +24,7 @@ import { analyzeFileNaming } from '../analyzers/style/fileNamingAnalyzer';
 import { analyzeCssClassNaming } from '../analyzers/style/cssClassNamingAnalyzer';
 import { analyzeRequestHandlers } from '../analyzers/structure/requestHandlerAnalyzer';
 import { analyzeComponentLocation } from '../analyzers/structure/componentLocationAnalyzer';
+import { analyzeFolderStructure } from '../analyzers/structure/folderNamingAnalyzer';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -137,7 +138,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			}
 
 			if (config.rules.fileNaming.enabled) {
-				analyzeFileNaming(lines, fileLabel, findings);
+				analyzeFileNaming(lines, fileLabel, findings, folder.name);
 			}
 
 			if (config.rules.componentLocation.enabled) {
@@ -151,6 +152,8 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		// Se ejecuta despues del ciclo porque una interfaz puede estar en un archivo y su implementacion en otro
 
 		const folderPaths = await collectFolderPaths(folder.uri, excludeMatchers);
+
+		analyzeFolderStructure(folderPaths, folder.name, findings);
 
 		if (config.rules.interfaces.enabled) {
 			await analyzeInterfaceContracts(fileLines, folder.uri, excludePattern, findings, config.rules.interfaces);
