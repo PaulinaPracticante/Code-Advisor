@@ -4369,11 +4369,31 @@ var MANAGMENT_VIEW2_REQUIRED_FOLDERS = [
   "public",
   "public/assets",
   "src",
+  "src/hooks",
   "src/api/auth",
   "src/api/customers",
   "src/api/dashboard",
   "src/api/shipments",
   "src/shared/components"
+];
+var ONSITE_V2_REPO_NAME = "OnSiteV2_MX";
+var ONSITE_V2_REQUIRED_FOLDERS = [
+  "src",
+  "src/actions",
+  "src/component",
+  "src/component/cards",
+  "src/component/inputs",
+  "src/components/navigation",
+  "src/components/navigation/drawer",
+  "src/components/navigation/sidebar",
+  "src/components/navigation/tabs",
+  "src/components/pagination",
+  "src/components/typography",
+  "src/interfaces",
+  "src/interfaces/auth",
+  "src/interfaces/locations",
+  "src/interfaces/shipments",
+  "src/interfaces/tables"
 ];
 function normalizePath(folderPath) {
   return folderPath.replace(/\\/g, "/");
@@ -4381,20 +4401,28 @@ function normalizePath(folderPath) {
 function getFolderName(folderPath) {
   return folderPath.split("/").pop() ?? folderPath;
 }
+var REQUIRED_FOLDERS_BY_REPO = {
+  [MANAGEMENT_VIEW2_REPO_NAME]: { requiredFolders: MANAGMENT_VIEW2_REQUIRED_FOLDERS, checkPascalCase: true, checkKebabCase: false },
+  [ONSITE_V2_REPO_NAME]: { requiredFolders: ONSITE_V2_REQUIRED_FOLDERS, checkPascalCase: false, checkKebabCase: true }
+};
 function analyzeFolderStructure(folderPaths, repoName, findings) {
-  if (repoName !== MANAGEMENT_VIEW2_REPO_NAME) {
+  const rules = REQUIRED_FOLDERS_BY_REPO[repoName];
+  if (!rules) {
     return;
   }
   const normalizedPaths = folderPaths.map(normalizePath);
-  for (const requiredFolder of MANAGMENT_VIEW2_REQUIRED_FOLDERS) {
+  for (const requiredFolder of rules.requiredFolders) {
     const actualPath = normalizedPaths.find((folderPaths2) => folderPaths2.toLocaleLowerCase() === requiredFolder.toLocaleLowerCase());
     if (!actualPath) {
       findings.push('Estructura del proyecto - No se encontro la carpeta "' + requiredFolder + '"');
       continue;
     }
     const folderName = getFolderName(actualPath);
-    if (!matchesCase(folderName, "PascalCase")) {
+    if (rules.checkPascalCase && !matchesCase(folderName, "PascalCase")) {
       findings.push(actualPath + " - La carpeta " + folderName + " no usa PascalCase");
+    }
+    if (rules.checkKebabCase && !matchesCase(folderName, "kebab-case")) {
+      findings.push(actualPath + " - La carpeta " + folderName + " no usa kebab-case");
     }
   }
 }
