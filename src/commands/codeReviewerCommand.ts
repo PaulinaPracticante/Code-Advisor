@@ -25,6 +25,7 @@ import { analyzeCssClassNaming } from '../analyzers/style/cssClassNamingAnalyzer
 import { analyzeRequestHandlers } from '../analyzers/structure/requestHandlerAnalyzer';
 import { analyzeComponentLocation } from '../analyzers/structure/componentLocationAnalyzer';
 import { analyzeFolderStructure } from '../analyzers/structure/folderNamingAnalyzer';
+import { detectProjectMeta, shouldRunAnalyzer } from '../shared/projectProfile';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -59,6 +60,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		}
 
 		const config = await loadConfig(folder.uri);
+		const projectMeta  = await detectProjectMeta(folder.uri);
 		const excludeMatchers = buildExcludeMatchers(config);
 
 		const findings: string[] = []; // Aqui se van juntando los hallazgos de todos los archivos del proyecto
@@ -100,36 +102,36 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			fileLines.set(fileLabel, lines);
 			changedLinesByFile.set(fileLabel, changedLines);
 
-			if (config.rules.parameters.enabled) {
+			if (config.rules.parameters.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 				analyzeParameters(lines, fileLabel, findings, changedLines, config.rules.parameters);
 			}
 
-			if (config.rules.requestModels.enabled) {
+			if (config.rules.requestModels.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 				analyzeRequestModels(lines, fileLabel, findings, changedLines, config.rules.requestModels);
 			}
 
-			if (config.rules.dtoAutoMapper.enabled) {
+			if (config.rules.dtoAutoMapper.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 				analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines, config.rules.dtoAutoMapper);
 			}
 
-			if (config.rules.linq.enabled) {
+			if (config.rules.linq.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 				analyzeLinqUsage(lines, fileLabel, findings, changedLines, config.rules.linq);
 			}
 
-			if (config.rules.objectUsage.enabled) {
+			if (config.rules.objectUsage.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 				analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage);
 			}
 
-			if (config.rules.requestHandlers.enabled) {
+			if (config.rules.requestHandlers.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 				analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers);
 			}
 
 			if (config.rules.indentation.enabled) { analyzeIndentation(lines, fileLabel, findings, changedLines); }
-			if (config.rules.ifBraces.enabled) { analyzeIfStatements(lines, fileLabel, findings, changedLines); }
-			if (config.rules.async.enabled) { analyzeAsyncUsage(lines, fileLabel, findings, changedLines); }
-			if (config.rules.varUsage.enabled) { analyzeVarUsage(lines, fileLabel, findings, changedLines); }
-			if (config.rules.stringInterpolation.enabled) { analyzeStringInterpolation(lines, fileLabel, findings, changedLines); }
-			if (config.rules.exceptionHandling.enabled) { analyzeExceptionHandling(lines, fileLabel, findings, changedLines); }
+			if (config.rules.ifBraces.enabled && shouldRunAnalyzer(projectMeta, 'shared')) { analyzeIfStatements(lines, fileLabel, findings, changedLines); }
+			if (config.rules.async.enabled && shouldRunAnalyzer(projectMeta, 'backend')) { analyzeAsyncUsage(lines, fileLabel, findings, changedLines); }
+			if (config.rules.varUsage.enabled && shouldRunAnalyzer(projectMeta, 'backend')) { analyzeVarUsage(lines, fileLabel, findings, changedLines); }
+			if (config.rules.stringInterpolation.enabled && shouldRunAnalyzer(projectMeta, 'backend')) { analyzeStringInterpolation(lines, fileLabel, findings, changedLines); }
+			if (config.rules.exceptionHandling.enabled && shouldRunAnalyzer(projectMeta, 'backend')) { analyzeExceptionHandling(lines, fileLabel, findings, changedLines); }
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
@@ -137,11 +139,11 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 				analyzeNaming(lines, languageId, fileLabel, findings);
 			}
 
-			if (config.rules.fileNaming.enabled) {
+			if (config.rules.fileNaming.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
 				analyzeFileNaming(lines, fileLabel, findings, folder.name);
 			}
 
-			if (config.rules.componentLocation.enabled) {
+			if (config.rules.componentLocation.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
 				analyzeComponentLocation(lines, fileLabel, findings, config.rules.componentLocation);
 			}
 
@@ -153,15 +155,17 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 		const folderPaths = await collectFolderPaths(folder.uri, excludeMatchers);
 
-		analyzeFolderStructure(folderPaths, folder.name, findings);
+		if (shouldRunAnalyzer(projectMeta, 'frontend')) {
+			analyzeFolderStructure(folderPaths, folder.name, findings);
+		}
 
-		if (config.rules.interfaces.enabled) {
+		if (config.rules.interfaces.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 			await analyzeInterfaceContracts(fileLines, folder.uri, excludePattern, findings, config.rules.interfaces);
 		}
-		if (config.rules.layers.enabled) {
+		if (config.rules.layers.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 			analyzeLayeredStructure(fileLines, folderPaths, findings, config.rules.layers);
 		}
-		if (config.rules.duplicateCode.enabled) {
+		if (config.rules.duplicateCode.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 			analyzeDuplicateCode(fileLines, changedLinesByFile, findings, config.rules.duplicateCode);
 		}
 
@@ -173,7 +177,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const bytes = await vscode.workspace.fs.readFile(uri);
 			const lines = Buffer.from(bytes).toString('utf8').split('\n');
 
-			if(config.rules.envNaming.enabled) {
+			if(config.rules.envNaming.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 				analyzeEnvVariables(lines, fileLabel, findings);
 			}
 		}
@@ -188,7 +192,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const extension = fileLabel.split('.').pop();
 			const classLenguage = extension === 'css' ? 'css' : 'html'; 
 
-			if (config.rules.cssClassNaming.enabled && (extension === 'html' || extension === 'css' || extension === 'jsx' || extension === 'tsx')) {
+			if (config.rules.cssClassNaming.enabled && (extension === 'html' || extension === 'css' || extension === 'jsx' || extension === 'tsx') && shouldRunAnalyzer(projectMeta, 'frontend')) {
 				analyzeCssClassNaming(lines, classLenguage, fileLabel, findings);
 			}
 		}
