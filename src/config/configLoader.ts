@@ -89,6 +89,10 @@ export interface EnglishOnlyConfig extends RuleToggle {
     model: string;
 }
 
+export interface SemanticNameConfig extends RuleToggle {
+    model: string;
+}
+
 // reglas que todavia no tienen parametros propios configurables, solo enabled/disabled
 export interface CodeAdvisorConfig {
     exclude: string[];
@@ -115,6 +119,7 @@ export interface CodeAdvisorConfig {
         requestHandlers: RequestHnadlersConfig;
         componentLocation: ComponentLocationConfig;
         englishOnly: EnglishOnlyConfig;
+        semanticNaming: SemanticNameConfig;
     };
 }
 
@@ -187,6 +192,7 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
             exemptFiles: ['App', 'main', 'index', '_app', '_document'],
         },
         englishOnly: { enabled: true, model: 'claude-sonnet-5-5' },
+        semanticNaming: { enabled: true, model: 'claude-sonnet-5-5'},
         indentation: { enabled: true },
         ifBraces: { enabled: true },
         ternaries: { enabled: true },
