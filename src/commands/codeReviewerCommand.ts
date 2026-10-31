@@ -26,6 +26,7 @@ import { analyzeRequestHandlers } from '../analyzers/structure/requestHandlerAna
 import { analyzeComponentLocation } from '../analyzers/structure/componentLocationAnalyzer';
 import { analyzeFolderStructure } from '../analyzers/structure/folderNamingAnalyzer';
 import { detectProjectMeta, shouldRunAnalyzer } from '../shared/projectProfile';
+import { analyzeEnglishLanguage } from '../analyzers/ai/englishLanguageAnalyzer';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -124,6 +125,10 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 			if (config.rules.requestHandlers.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
 				analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers);
+			}
+
+			if (config.rules.englishOnly.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				await analyzeEnglishLanguage(lines, fileLabel, findings, changedLines, config.rules.englishOnly);
 			}
 
 			if (config.rules.indentation.enabled) { analyzeIndentation(lines, fileLabel, findings, changedLines); }
