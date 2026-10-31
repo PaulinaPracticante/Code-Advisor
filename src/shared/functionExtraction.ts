@@ -72,3 +72,15 @@ export function collectChangesFunction(lines: string[], changedLines: Set<number
 
     return blocks; //devuelve la lista con las funciones afectadas en el PR 
 }
+
+
+const CLASS_DECLARATION_PATTERN = /^(?:(?:public|private|protected|internal|export|default|static|abstract|sealed)\s+)*class\s+([A-Za-z_][A-Za-z0-9_]*)/;
+
+//busca desde el inicio de la funcion la clase que la contiene 
+export function findEnclosingClassName(lines: string[], startLine: number): string | null {
+    for (let i = startLine; i >= 0; i--) {
+        const match = lines[i].trim().match(CLASS_DECLARATION_PATTERN);
+        if (match) { return match[1]; }
+    }
+    return null;
+}
