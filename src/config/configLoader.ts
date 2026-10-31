@@ -85,6 +85,10 @@ export interface ComponentLocationConfig extends RuleToggle {
     exemptFiles: string[];
 }
 
+export interface EnglishOnlyConfig extends RuleToggle {
+    model: string;
+}
+
 // reglas que todavia no tienen parametros propios configurables, solo enabled/disabled
 export interface CodeAdvisorConfig {
     exclude: string[];
@@ -110,6 +114,7 @@ export interface CodeAdvisorConfig {
         duplicateCode: DuplicateCodeConfig;
         requestHandlers: RequestHnadlersConfig;
         componentLocation: ComponentLocationConfig;
+        englishOnly: EnglishOnlyConfig;
     };
 }
 
@@ -181,6 +186,7 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
             exemptFolders: ['app', 'pages', 'screens', 'views'],
             exemptFiles: ['App', 'main', 'index', '_app', '_document'],
         },
+        englishOnly: { enabled: true, model: 'claude-sonnet-5-5' },
         indentation: { enabled: true },
         ifBraces: { enabled: true },
         ternaries: { enabled: true },

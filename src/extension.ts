@@ -1,4 +1,6 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as dotenv from 'dotenv';
 import { registerCodeReviewerCommand } from './commands/codeReviewerCommand';
 
 // This method is called when your extension is activated
@@ -6,6 +8,9 @@ import { registerCodeReviewerCommand } from './commands/codeReviewerCommand';
 export function activate(context: vscode.ExtensionContext) {
 
 	console.log('Congratulations, your extension "codeadvisor" is now active!');
+
+	// Carga la ANTHROPIC_API_KEY desde src/.env (archivo ignorado por git)
+	dotenv.config({ path: path.join(context.extensionPath, 'src', '.env') });
 
 	// comando para verificar el repo de git
 	const disposable = vscode.commands.registerCommand('codeadvisor.gitVerification', () => {
