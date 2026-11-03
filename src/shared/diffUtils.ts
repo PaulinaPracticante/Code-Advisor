@@ -29,6 +29,37 @@ export function getChangedLineNumbers(workspaceRoot: string, baseBranch: string,
     return changedLines;
 }
 
+// hash corto y titulo (primera linea del mensaje) de un commit del PR
+export interface CommitInfo {
+    hash: string;
+    subject: string;
+}
+
+// devuelve los commits que tiene la rama actual y no tiene la rama base, sin contar los merge
+// (dos puntos: son los commits del PR, no el diff de archivos)
+export function getCommitSubjects(workspaceRoot: string, baseBranch: string): CommitInfo[] {
+    let output: string;
+
+    try {
+        output = execFileSync(
+            'git',
+            ['log', '--no-merges', '--format=%h%x09%s', `origin/${baseBranch}..HEAD`],
+            { cwd: workspaceRoot, encoding: 'utf8' }
+        );
+    } catch (error) {
+        throw new Error(`No se pudo obtener los commits contra la rama "origin/${baseBranch}": ${(error as Error).message}`);
+    }
+
+    return output
+        .split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .map(line => {
+            const [hash, ...subject] = line.split('\t');
+            return { hash, subject: subject.join('\t') };
+        });
+}
+
 // revisa si alguna linea dentro de [startLine, endLineInclusive] (1-indexado) cambio.
 // se usa para hallazgos que se reportan en la linea donde empieza un bloque (metodo, loop, catch)
 // aunque lo que realmente cambio este mas abajo en ese bloque.
