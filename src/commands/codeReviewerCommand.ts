@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { execFileSync } from 'child_process';
 import { loadConfig, buildExcludeMatchers, isExluded } from '../config/configLoader';
-import { getChangedLineNumbers } from '../shared/diffUtils';
+import { getChangedLineNumbers, getCommitSubjects } from '../shared/diffUtils';
 import { EXTENSION_TO_LANGUAGE_ID } from '../config/namingConfig';
 import { analyzeNaming } from '../analyzers/style/namingAnalyzer';
 import { analyzeIndentation } from '../analyzers/style/indentationAnalyzer';
@@ -28,6 +28,13 @@ import { analyzeFolderStructure } from '../analyzers/structure/folderNamingAnaly
 import { detectProjectMeta, shouldRunAnalyzer } from '../shared/projectProfile';
 import { analyzeEnglishLanguage } from '../analyzers/ai/englishLanguageAnalyzer';
 import { analyzeSemanticNaming } from '../analyzers/ai/semanticNamingAnalyzer';
+import { analyzeSingleResponsibility } from '../analyzers/ai/singleResponsibilityAnalyzer';
+import { analyzeCodeComplexity } from '../analyzers/ai/codeComplexityAnalyzer';
+import { analyzeCommentLanguage } from '../analyzers/ai/commentLanguageAnalyzer';
+import { analyzeQueryViews } from '../analyzers/structure/queryViewAnalyzer';
+import { analyzeTableAliases } from '../analyzers/structure/tableAliasAnalyzer';
+import { analyzeTransactions } from '../analyzers/structure/transactionAnalyzer';
+import { analyzeCommitMessages } from '../analyzers/git/commitMessageAnalyzer';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -128,12 +135,36 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 				analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers);
 			}
 
-			if (config.rules.englishOnly.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			if (config.rules.englishOnly.enabled && shouldRunAnalyzer(projectMeta, 'shared')) {
 				await analyzeEnglishLanguage(lines, fileLabel, findings, changedLines, config.rules.englishOnly);
 			}
 
-			if (config.rules.semanticNaming.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			if (config.rules.semanticNaming.enabled && shouldRunAnalyzer(projectMeta, 'shared')) {
 				await analyzeSemanticNaming(lines, fileLabel, findings, changedLines, config.rules.semanticNaming);
+			}
+
+			if (config.rules.singleResponsibility.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				await analyzeSingleResponsibility(lines, fileLabel, findings, changedLines, config.rules.singleResponsibility);
+			}
+
+			if (config.rules.codeComplexity.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				await analyzeCodeComplexity(lines, fileLabel, findings, changedLines, config.rules.codeComplexity);
+			}
+
+			if (config.rules.commentLanguage.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
+				await analyzeCommentLanguage(lines, fileLabel, findings, changedLines, config.rules.commentLanguage);
+			}
+
+			if (config.rules.queryViews.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				analyzeQueryViews(lines, fileLabel, findings, changedLines, config.rules.queryViews);
+			}
+
+			if (config.rules.tableAlias.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				analyzeTableAliases(lines, fileLabel, findings, changedLines);
+			}
+
+			if (config.rules.transactions.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				analyzeTransactions(lines, fileLabel, findings, changedLines);
 			}
 
 			if (config.rules.indentation.enabled) { analyzeIndentation(lines, fileLabel, findings, changedLines); }
@@ -205,6 +236,13 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			if (config.rules.cssClassNaming.enabled && (extension === 'html' || extension === 'css' || extension === 'jsx' || extension === 'tsx') && shouldRunAnalyzer(projectMeta, 'frontend')) {
 				analyzeCssClassNaming(lines, classLenguage, fileLabel, findings);
 			}
+		}
+
+		// ----------------------------------------------------------------------------------------
+		// ---- COMMITS ---------------------------------------------------------------------------
+
+		if (config.rules.commitMessage.enabled && shouldRunAnalyzer(projectMeta, 'shared')) {
+			analyzeCommitMessages(getCommitSubjects(folder.uri.fsPath, baseBranch), findings, config.rules.commitMessage);
 		}
 
 		// ----------------------------------------------------------------------------------------
