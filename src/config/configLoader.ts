@@ -105,6 +105,11 @@ export interface CommentLanguageConfig extends RuleToggle {
     model: string;
 }
 
+export interface AiReviewConfig {
+    model: string;
+    maxTokens: number;
+}
+
 export interface QueryViewsConfig extends RuleToggle {
     maxJoins: number;
     maxColumns: number;
@@ -149,6 +154,7 @@ export interface CodeAdvisorConfig {
         tableAlias: RuleToggle;
         transactions: RuleToggle;
         commitMessage: CommitMessageConfig;
+        aiReview: AiReviewConfig;
     };
 }
 
@@ -225,6 +231,7 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
         singleResponsibility: { enabled: true, model: 'claude-sonnet-5-5' },
         codeComplexity: { enabled: true, model: 'claude-sonnet-5-5' },
         commentLanguage: { enabled: true, model: 'claude-sonnet-5-5' },
+        aiReview: { model: 'claude-sonnet-5-5', maxTokens: 8000 },
         queryViews: { enabled: true, maxJoins: 3, maxColumns: 15, maxParameters: 5 },
         tableAlias: { enabled: true },
         transactions: { enabled: true },
