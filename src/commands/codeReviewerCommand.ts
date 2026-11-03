@@ -26,15 +26,13 @@ import { analyzeRequestHandlers } from '../analyzers/structure/requestHandlerAna
 import { analyzeComponentLocation } from '../analyzers/structure/componentLocationAnalyzer';
 import { analyzeFolderStructure } from '../analyzers/structure/folderNamingAnalyzer';
 import { detectProjectMeta, shouldRunAnalyzer } from '../shared/projectProfile';
-import { analyzeEnglishLanguage } from '../analyzers/ai/englishLanguageAnalyzer';
-import { analyzeSemanticNaming } from '../analyzers/ai/semanticNamingAnalyzer';
-import { analyzeSingleResponsibility } from '../analyzers/ai/singleResponsibilityAnalyzer';
-import { analyzeCodeComplexity } from '../analyzers/ai/codeComplexityAnalyzer';
-import { analyzeCommentLanguage } from '../analyzers/ai/commentLanguageAnalyzer';
 import { analyzeQueryViews } from '../analyzers/structure/queryViewAnalyzer';
 import { analyzeTableAliases } from '../analyzers/structure/tableAliasAnalyzer';
 import { analyzeTransactions } from '../analyzers/structure/transactionAnalyzer';
 import { analyzeCommitMessages } from '../analyzers/git/commitMessageAnalyzer';
+import { collectChangesFunction, findEnclosingClassName } from '../shared/functionExtraction';
+import { extractComments } from '../shared/commentExtraction';
+import { AiCommentTask, AiFunctionTask, MIN_FUNCTION_LINES, runCombinedAiReview } from '../analyzers/ai/combinedAiAnalyzer';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -99,6 +97,11 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		const fileLines = new Map<string, string[]>();
 		const changedLinesByFile = new Map<string, Set<number>>();
 
+
+		const aiFunctionTasks: AiFunctionTask[] = [];
+		const aiCommentTasks: AiCommentTask[] = [];
+		let aiFunctionIdCounter = 0;
+		let aiCommentIdCounter = 0;
 		// --------------------------------------------------------------------------------------
 		// ---- IDENTACION Y NOMBRES DE CLASES, FUNCIONES, METODOS, VARIABLES Y CONSTANTES ------
 		// ---- PARAMETROS ----------------------------------------------------------------------
@@ -135,24 +138,48 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 				analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers);
 			}
 
-			if (config.rules.englishOnly.enabled && shouldRunAnalyzer(projectMeta, 'shared')) {
-				await analyzeEnglishLanguage(lines, fileLabel, findings, changedLines, config.rules.englishOnly);
+			const englishEnabled = config.rules.englishOnly.enabled && shouldRunAnalyzer(projectMeta, 'shared');
+			const semanticEnabled = config.rules.semanticNaming.enabled && shouldRunAnalyzer(projectMeta, 'shared');
+			const responsabilityEnabled = config.rules.singleResponsibility.enabled && shouldRunAnalyzer(projectMeta, 'backend');
+			const complexityEnabled = config.rules.codeComplexity.enabled && shouldRunAnalyzer(projectMeta, 'backend');
+			
+			if (englishEnabled || semanticEnabled || responsabilityEnabled || complexityEnabled) {
+				for (const block of collectChangesFunction(lines, changedLines)) {
+					const longEnough = block.endLine - block.startLine + 1 >= MIN_FUNCTION_LINES;
+					const checks = {
+						english: englishEnabled,
+						semantic: semanticEnabled,
+						singleResponsability: responsabilityEnabled && longEnough,
+						complexity: complexityEnabled && longEnough,
+					};
+
+					if (!checks.english && !checks.semantic && !checks.singleResponsability && !checks.complexity) { continue; }
+
+					aiFunctionTasks.push({
+						id: 'fn' + (aiFunctionIdCounter++),
+						fileLabel,
+						functionName: block.name,
+						className: findEnclosingClassName(lines, block.startLine - 1),
+						startLine: block.startLine,
+						code: block.code,
+						checks,
+					});
+				}
 			}
 
-			if (config.rules.semanticNaming.enabled && shouldRunAnalyzer(projectMeta, 'shared')) {
-				await analyzeSemanticNaming(lines, fileLabel, findings, changedLines, config.rules.semanticNaming);
-			}
+			const commentEnabled = config.rules.commentLanguage.enabled
+				&& shouldRunAnalyzer(projectMeta, 'frontend')
+				&& !fileLabel.endsWith('.cs');
 
-			if (config.rules.singleResponsibility.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				await analyzeSingleResponsibility(lines, fileLabel, findings, changedLines, config.rules.singleResponsibility);
-			}
-
-			if (config.rules.codeComplexity.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				await analyzeCodeComplexity(lines, fileLabel, findings, changedLines, config.rules.codeComplexity);
-			}
-
-			if (config.rules.commentLanguage.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
-				await analyzeCommentLanguage(lines, fileLabel, findings, changedLines, config.rules.commentLanguage);
+			if (commentEnabled) {
+				for (const comment of extractComments(lines, changedLines)) {
+					aiCommentTasks.push({
+						id: 'cm' + (aiCommentIdCounter++),
+						fileLabel,
+						line: comment.line,
+						text: comment.text,
+					});
+				}
 			}
 
 			if (config.rules.queryViews.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
@@ -190,6 +217,11 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 		}
 
+		// -------------------------------------------------------------------------------------
+		// ---- IA: UNA SOLA LLAMADA PARA TODO EL PR -------------------------------------------
+		await runCombinedAiReview(aiFunctionTasks, aiCommentTasks, findings, config.rules.aiReview);
+
+		
 		// --------------------------------------------------------------------------------------
 		// ---- CONTRATOS: INTERFACES Y CLASES ABSTRACTAS ---------------------------------------
 		// Se ejecuta despues del ciclo porque una interfaz puede estar en un archivo y su implementacion en otro
