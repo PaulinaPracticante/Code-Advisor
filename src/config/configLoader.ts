@@ -93,6 +93,28 @@ export interface SemanticNameConfig extends RuleToggle {
     model: string;
 }
 
+export interface SingleResponsibilityConfig extends RuleToggle {
+    model: string;
+}
+
+export interface CodeComplexityConfig extends RuleToggle {
+    model: string;
+}
+
+export interface CommentLanguageConfig extends RuleToggle {
+    model: string;
+}
+
+export interface QueryViewsConfig extends RuleToggle {
+    maxJoins: number;
+    maxColumns: number;
+    maxParameters: number;
+}
+
+export interface CommitMessageConfig extends RuleToggle {
+    pattern: string;
+}
+
 // reglas que todavia no tienen parametros propios configurables, solo enabled/disabled
 export interface CodeAdvisorConfig {
     exclude: string[];
@@ -120,6 +142,13 @@ export interface CodeAdvisorConfig {
         componentLocation: ComponentLocationConfig;
         englishOnly: EnglishOnlyConfig;
         semanticNaming: SemanticNameConfig;
+        singleResponsibility: SingleResponsibilityConfig;
+        codeComplexity: CodeComplexityConfig;
+        commentLanguage: CommentLanguageConfig;
+        queryViews: QueryViewsConfig;
+        tableAlias: RuleToggle;
+        transactions: RuleToggle;
+        commitMessage: CommitMessageConfig;
     };
 }
 
@@ -193,6 +222,14 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
         },
         englishOnly: { enabled: true, model: 'claude-sonnet-5-5' },
         semanticNaming: { enabled: true, model: 'claude-sonnet-5-5'},
+        singleResponsibility: { enabled: true, model: 'claude-sonnet-5-5' },
+        codeComplexity: { enabled: true, model: 'claude-sonnet-5-5' },
+        commentLanguage: { enabled: true, model: 'claude-sonnet-5-5' },
+        queryViews: { enabled: true, maxJoins: 3, maxColumns: 15, maxParameters: 5 },
+        tableAlias: { enabled: true },
+        transactions: { enabled: true },
+        // iniciales en mayuscula + ":" o "_" + descripcion, ej. ABCD:Corrige validacion del login
+        commitMessage: { enabled: true, pattern: '^[A-Z]{2,5}[:_]\\s?\\S.*$' },
         indentation: { enabled: true },
         ifBraces: { enabled: true },
         ternaries: { enabled: true },
