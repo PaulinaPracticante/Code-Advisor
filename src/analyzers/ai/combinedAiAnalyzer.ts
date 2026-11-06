@@ -2,7 +2,6 @@
 // ----- REVISION COMBINADA DE IA: INGLES, COHERENCIA DE NOMBRES, RESPONSABILIDAD UNICA, -
 // ----- COMPLEJIDAD Y COMENTARIOS EN UNA SOLA LLAMADA A LA IA POR EJECUCION DE COMANDO --
 
-import { json } from "stream/consumers";
 import { callClaude } from "../../shared/claudeClient";
 import { RULE_PRIORITIES } from "../../config/configLoader";
 
@@ -13,6 +12,7 @@ export interface AiFunctionChecks {
     semantic: boolean;
     singleResponsability: boolean;
     complexity: boolean;
+    guidelines: boolean;
 }
 
 export interface AiFunctionTask {
@@ -37,7 +37,7 @@ export interface AiReviewConfig {
     maxTokens: number;
 }
 
-type FunctionCheckName = 'idioma_ingles' | 'coherencia_nombres' | 'responsabilidad_unica' | 'complejidad';
+type FunctionCheckName = 'idioma_ingles' | 'coherencia_nombres' | 'responsabilidad_unica' | 'complejidad' | 'guia_proyecto';
 
 // a que regla de RULE_PRIORITIES corresponde cada check, para etiquetar la prioridad del hallazgo
 const CHECK_TO_RULE: Record<FunctionCheckName, string> = {
@@ -45,6 +45,7 @@ const CHECK_TO_RULE: Record<FunctionCheckName, string> = {
     coherencia_nombres: 'semanticNaming',
     responsabilidad_unica: 'singleResponsibility',
     complejidad: 'codeComplexity',
+    guia_proyecto: 'projectGuidelines'
 };
 
 function tag(ruleName: string, message: string): string {
@@ -57,6 +58,7 @@ interface CombinedFunctionFinding {
     line: number;
     found: string;
     message: string;
+    regla?: string | number; // solo en guia_proyecto: numero o titulo de la regla violada
 }
 
 interface CombinedCommentFinding {
@@ -71,11 +73,12 @@ function describeChecks(checks: AiFunctionChecks): string {
         checks.semantic ? 'coherencia_nombres' : null,
         checks.singleResponsability ? 'responsabilidad_unica' : null,
         checks.complexity ? 'complejidad' : null,
+        checks.guidelines ? 'guia_proyecto' : null,
     ].filter(Boolean).join(', ');
 }
 
 // arma un prompt uncio con todas las funciones y comentarios del PR
-function buildCombinedPrompt(functionTasks: AiFunctionTask[], commentTasks: AiCommentTask[]): string {
+function buildCombinedPrompt(functionTasks: AiFunctionTask[], commentTasks: AiCommentTask[], hasGuidelines: boolean): string {
     const functionSection = functionTasks.map(task =>  [
         `### ${task.id}`,
         `archivo: ${task.fileLabel}`,
@@ -89,6 +92,18 @@ function buildCombinedPrompt(functionTasks: AiFunctionTask[], commentTasks: AiCo
     const commentsSection = commentTasks
         .map(task => `${task.id} [${task.fileLabel}]: ${task.text}`)
         .join('\n');
+
+    // solo existe cuando hay guia (se inserta junto a los demas checks, antes del formato de salida); sin guia
+    // el prompt queda igual que siempre
+    const guidelinesInstruction = hasGuidelines
+        ? [
+            '- guia_proyecto: ademas de los checks anteriores, evalua cada funcion contra las reglas del',
+            ' proyecto que recibiste en el contexto (system). Reporta cada violacion encontrada: maximo 1',
+            ' violacion por regla por funcion (la linea donde ocurre); si la funcion viola varias reglas,',
+            ' reporta cada una como un hallazgo aparte. En "regla" indica el numero o titulo de la regla violada.',
+            ' No reportes codigo que cumple la regla, ni menciones de la regla en comentarios o cadenas de texto.',
+        ].join('\n')
+        : null;
     
     return [
         'Eres un revisor de estandares de codigo. Vas a revisar varias funciones y comentarios de un',
@@ -104,6 +119,7 @@ function buildCombinedPrompt(functionTasks: AiFunctionTask[], commentTasks: AiCo
         ' la linea donde empieza la responsabilidad que sobra).',
         '- complejidad: logica demasiado anidada o dificil de seguir (maximo 1 violacion por funcion,',
         ' la linea donde empieza el bloque mas complejo).',
+        guidelinesInstruction,
         '',
         'Para los comentarios listados abajo (formato "<id> [archivo]: <texto>"), indica cuales NO estan',
         'escritos en español, ignorando termino tecnicos, nombres de variables/librerias, codigo y urls.',
@@ -111,7 +127,8 @@ function buildCombinedPrompt(functionTasks: AiFunctionTask[], commentTasks: AiCo
         'Responde UNICAMENTE con JSON valido, sin texto adicional, con este formato exacto:',
         '{',
         '  "functions": [',
-        '    { "id":"<id de la funcion>", "check":"idioma_ingles|coherencia_nombres|responsabilidad_unica|complejidad",',
+        '    { "id":"<id de la funcion>", "check":"idioma_ingles|coherencia_nombres|responsabilidad_unica|complejidad' + (hasGuidelines ? '|guia_proyecto' : '') + '",',
+        hasGuidelines ? '      "regla":"<numero o titulo de la regla de la guia que se viola; solo para guia_proyecto>",' : null,
         '      "line":<linea 1-indexed dentro del bloque, 0 si es el nombre del archivo>,',
         '      "found":"<identificador o texto encontrado>", "message":"<explicacion breve>" }',
         '  ],',
@@ -126,7 +143,7 @@ function buildCombinedPrompt(functionTasks: AiFunctionTask[], commentTasks: AiCo
         '',
         '## Comentarios a analizar',
         commentsSection || '(ninguno)',
-    ].join('\n');
+    ].filter((line): line is string => line !== null).join('\n');
 }
 
 //extrae el bloque JSON de la respuesta
@@ -143,6 +160,23 @@ function parseCombinedResponse(rawText: string): { functions: CombinedFunctionFi
     }
 }
 
+// identifica la regla de la guia que se violo: el numero si lo trae ("Regla 3", "3. ..."), si no el texto
+function guidelineRuleKey(finding: CombinedFunctionFinding): string {
+    const rule = finding.regla !== undefined && finding.regla !== null ? String(finding.regla).trim() : '';
+    if (rule) {
+        const ruleNumber = rule.match(/\d+/);
+        return ruleNumber ? ruleNumber[0] : rule.toLowerCase();
+    }
+    return 'found:' + String(finding.found).trim().toLowerCase();
+}
+
+// antepone "Regla N: " al mensaje cuando la IA mando la regla aparte y el mensaje no la menciona
+function guidelineMessage(finding: CombinedFunctionFinding): string {
+    const rule = finding.regla !== undefined && finding.regla !== null ? String(finding.regla).trim().replace(/^regla\s*/i, '') : '';
+    if (!rule || /^regla\s*\d/i.test(finding.message)) { return finding.message; }
+    return (/^\d+$/.test(rule) ? 'Regla ' + rule : 'Regla "' + rule + '"') + ': ' + finding.message;
+}
+
 //convierte los hallazgos de funciones de vuelta a los mismos mensjes que generaban los analizadores separados
 function applyFunctionFindings(
     functionFindings: CombinedFunctionFinding[],
@@ -151,6 +185,7 @@ function applyFunctionFindings(
 ): void {
     const fileNameReported = new Set<string>(); // clave: fileLabel + '|' + check, se reporta una vez por archivo
     const classNameReported = new Set<string>(); // clave: fileLabel + '|' + className
+    const guidelineReported = new Set<string>(); // clave: fileLabel + '|' + linea + '|' + regla (funciones anidadas repiten el hallazgo)
 
     for (const finding of functionFindings) {
         const task = tasksById.get(finding.id);
@@ -194,6 +229,14 @@ function applyFunctionFindings(
             case 'complejidad':
                 findings.push(tag(CHECK_TO_RULE[finding.check], task.fileLabel + ':' + absoluteLine + ' - La funcion "' + task.functionName + '" tiene logica demasiado compleja: ' + finding.found + ' (' + finding.message + ')'));
                 break;
+
+            case 'guia_proyecto': {
+                const key = task.fileLabel + '|' + absoluteLine + '|' + guidelineRuleKey(finding);
+                if (guidelineReported.has(key)) { continue; }
+                guidelineReported.add(key);
+                findings.push(tag(CHECK_TO_RULE[finding.check], task.fileLabel + ':' + absoluteLine + ' - Viola la guia del proyecto: ' + finding.found + ' (' + guidelineMessage(finding) + ')'));
+                break;
+            }
         }
     }
 }
@@ -214,16 +257,17 @@ export async function runCombinedAiReview(
     functionTasks: AiFunctionTask[],
     commentTask: AiCommentTask[],
     findings: string[],
-    config: AiReviewConfig
+    config: AiReviewConfig,
+    guidelines: string | null
 ): Promise<void> {
     if (functionTasks.length === 0 && commentTask.length === 0) { return; }
 
     const functionTaskById = new Map(functionTasks.map(task => [task.id, task]));
     const commentTaskById = new Map(commentTask.map(task => [task.id, task]));
-    const prompt = buildCombinedPrompt(functionTasks, commentTask);
+    const prompt = buildCombinedPrompt(functionTasks, commentTask, guidelines !== null);
 
     try {
-        const responseText = await callClaude(prompt, { model: config.model, maxTokens: config.maxTokens });
+        const responseText = await callClaude(prompt, { model: config.model, maxTokens: config.maxTokens, system: guidelines ?? undefined, });
         const parsed = parseCombinedResponse(responseText);
         applyFunctionFindings(parsed.functions, functionTaskById, findings);
         applyCommentFindings(parsed.comments, commentTaskById, findings);
