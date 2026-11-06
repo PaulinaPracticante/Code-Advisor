@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { execFileSync } from 'child_process';
-import { loadConfig, buildExcludeMatchers, isExluded } from '../config/configLoader';
+import { loadConfig, buildExcludeMatchers, isExluded, RULE_PRIORITIES } from '../config/configLoader';
 import { getChangedLineNumbers, getCommitSubjects } from '../shared/diffUtils';
-import { EXTENSION_TO_LANGUAGE_ID } from '../config/namingConfig';
+import { EXTENSION_TO_LANGUAGE_ID, getNamingCaseStyles } from '../config/namingConfig';
 import { analyzeNaming } from '../analyzers/style/namingAnalyzer';
 import { analyzeIndentation } from '../analyzers/style/indentationAnalyzer';
 import { analyzeEnvVariables } from '../analyzers/env/envAnalyzer';
@@ -33,6 +33,8 @@ import { analyzeCommitMessages } from '../analyzers/git/commitMessageAnalyzer';
 import { collectChangesFunction, findEnclosingClassName } from '../shared/functionExtraction';
 import { extractComments } from '../shared/commentExtraction';
 import { AiCommentTask, AiFunctionTask, MIN_FUNCTION_LINES, runCombinedAiReview } from '../analyzers/ai/combinedAiAnalyzer';
+import { analyzeSolidFrontendIsp } from '../analyzers/structure/solidFrontendAnalyzer';
+import { collectSolidFrontendTask, runSolidFrontendReview, SolidFrontendTask } from '../analyzers/ai/solidFrontendAnalyzer';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -53,6 +55,24 @@ function getChangedFile(workspaceRoot: string, baseBranch: string): string[] {
 	} catch (error) {
 		throw new Error(`No se pudo obtener el diff contra la rama "origin/${baseBranch}": ${(error as Error).message}`);
 	}
+}
+
+function runWithPriority<T>(findings: string[], ruleName: string, run: () => T): T {
+	const before = findings.length;
+	const result = run();
+	const priority = RULE_PRIORITIES[ruleName] ?? 'Media';
+
+	const tag = () => {
+		for (let i = before; i < findings.length; i++) {
+			findings[i] = `[${priority}] ${findings[i]}`;
+		}
+	};
+
+	if (result instanceof Promise) {
+		return result.then(value => { tag(); return value; }) as T;
+	}
+	tag();
+	return result;
 }
 
 // Registra el comando que revisa el codigo de todo el proyecto (workspace)
@@ -100,8 +120,10 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 		const aiFunctionTasks: AiFunctionTask[] = [];
 		const aiCommentTasks: AiCommentTask[] = [];
+		const solidFrontendTasks: SolidFrontendTask[] = [];
 		let aiFunctionIdCounter = 0;
 		let aiCommentIdCounter = 0;
+		let solidFrontendIdCounter = 0;
 		// --------------------------------------------------------------------------------------
 		// ---- IDENTACION Y NOMBRES DE CLASES, FUNCIONES, METODOS, VARIABLES Y CONSTANTES ------
 		// ---- PARAMETROS ----------------------------------------------------------------------
@@ -115,27 +137,50 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			changedLinesByFile.set(fileLabel, changedLines);
 
 			if (config.rules.parameters.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeParameters(lines, fileLabel, findings, changedLines, config.rules.parameters);
+				runWithPriority(findings, 'parameters', () => 
+					analyzeParameters(lines, fileLabel, findings, changedLines, config.rules.parameters)
+				);
 			}
 
 			if (config.rules.requestModels.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeRequestModels(lines, fileLabel, findings, changedLines, config.rules.requestModels);
+				runWithPriority(findings, 'requestModels', () => 
+					analyzeRequestModels(lines, fileLabel, findings, changedLines, config.rules.requestModels)
+				);
 			}
 
 			if (config.rules.dtoAutoMapper.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines, config.rules.dtoAutoMapper);
+				runWithPriority(findings, 'dtoAutoMapper', () => 
+					analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines, config.rules.dtoAutoMapper)
+				);
 			}
 
 			if (config.rules.linq.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeLinqUsage(lines, fileLabel, findings, changedLines, config.rules.linq);
+				runWithPriority(findings, 'linq', () => 
+					analyzeLinqUsage(lines, fileLabel, findings, changedLines, config.rules.linq)
+				);
 			}
 
 			if (config.rules.objectUsage.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage);
+				runWithPriority(findings, 'objectUsage', () => 
+					analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage)
+				);
 			}
 
 			if (config.rules.requestHandlers.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers);
+				runWithPriority(findings, 'requestHandlers', () => 
+					analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers)
+				);
+			}
+
+			if (config.rules.solidFrontend.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
+				runWithPriority(findings, 'solidFrontend', () => 
+					analyzeSolidFrontendIsp(lines, fileLabel, findings, config.rules.solidFrontend)
+				);
+			}
+
+			if (config.rules.solidFrontendAi.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
+				const task = collectSolidFrontendTask(lines, fileLabel, changedLines, 'comp' + (solidFrontendIdCounter++));
+				if (task) { solidFrontendTasks.push(task); }
 			}
 
 			const englishEnabled = config.rules.englishOnly.enabled && shouldRunAnalyzer(projectMeta, 'shared');
@@ -183,63 +228,102 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			}
 
 			if (config.rules.queryViews.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeQueryViews(lines, fileLabel, findings, changedLines, config.rules.queryViews);
+				runWithPriority(findings, 'queryViews', () =>  
+					analyzeQueryViews(lines, fileLabel, findings, changedLines, config.rules.queryViews)
+				);
 			}
 
 			if (config.rules.tableAlias.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeTableAliases(lines, fileLabel, findings, changedLines);
+				runWithPriority(findings, 'tableAlias', () => 
+					analyzeTableAliases(lines, fileLabel, findings, changedLines)
+				);
 			}
 
 			if (config.rules.transactions.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeTransactions(lines, fileLabel, findings, changedLines);
+				runWithPriority(findings, 'transactions', () => 
+					analyzeTransactions(lines, fileLabel, findings, changedLines)
+				);
 			}
 
-			if (config.rules.indentation.enabled) { analyzeIndentation(lines, fileLabel, findings, changedLines); }
-			if (config.rules.ifBraces.enabled && shouldRunAnalyzer(projectMeta, 'shared')) { analyzeIfStatements(lines, fileLabel, findings, changedLines); }
-			if (config.rules.async.enabled && shouldRunAnalyzer(projectMeta, 'backend')) { analyzeAsyncUsage(lines, fileLabel, findings, changedLines); }
-			if (config.rules.varUsage.enabled && shouldRunAnalyzer(projectMeta, 'backend')) { analyzeVarUsage(lines, fileLabel, findings, changedLines); }
-			if (config.rules.stringInterpolation.enabled && shouldRunAnalyzer(projectMeta, 'backend')) { analyzeStringInterpolation(lines, fileLabel, findings, changedLines); }
-			if (config.rules.exceptionHandling.enabled && shouldRunAnalyzer(projectMeta, 'backend')) { analyzeExceptionHandling(lines, fileLabel, findings, changedLines); }
+			if (config.rules.indentation.enabled) {
+				runWithPriority(findings, 'indentation', () => analyzeIndentation(lines, fileLabel, findings, changedLines));
+			}
+			if (config.rules.ifBraces.enabled && shouldRunAnalyzer(projectMeta, 'shared')) {
+				runWithPriority(findings, 'ifBraces', () =>
+					analyzeIfStatements(lines, fileLabel, findings, changedLines, config.rules.ternaries.enabled)
+				);
+			}
+			if (config.rules.async.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				runWithPriority(findings, 'async', () => analyzeAsyncUsage(lines, fileLabel, findings, changedLines));
+			}
+			if (config.rules.varUsage.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				runWithPriority(findings, 'varUsage', () => analyzeVarUsage(lines, fileLabel, findings, changedLines));
+			}
+			if (config.rules.stringInterpolation.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				runWithPriority(findings, 'stringInterpolation', () => analyzeStringInterpolation(lines, fileLabel, findings, changedLines));
+			}
+			if (config.rules.exceptionHandling.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+				runWithPriority(findings, 'exceptionHandling', () => analyzeExceptionHandling(lines, fileLabel, findings, changedLines));
+			}
 
 			const extension = fileLabel.split('.').pop() ?? '';
 			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
-			if (languageId) {
-				analyzeNaming(lines, languageId, fileLabel, findings);
+			if (languageId && config.rules.naming.enabled) {
+				runWithPriority(findings, 'naming', () =>
+					analyzeNaming(lines, languageId, fileLabel, findings, getNamingCaseStyles(config.rules.naming, languageId))
+				);
 			}
 
 			if (config.rules.fileNaming.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
-				analyzeFileNaming(lines, fileLabel, findings, folder.name);
+				runWithPriority(findings, 'fileNaming', () => 
+					analyzeFileNaming(lines, fileLabel, findings, folder.name)
+				);
 			}
 
 			if (config.rules.componentLocation.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
-				analyzeComponentLocation(lines, fileLabel, findings, config.rules.componentLocation);
+				runWithPriority(findings, 'componentLocation', () => 
+					analyzeComponentLocation(lines, fileLabel, findings, config.rules.componentLocation)
+				);
 			}
 
 		}
 
 		// -------------------------------------------------------------------------------------
 		// ---- IA: UNA SOLA LLAMADA PARA TODO EL PR -------------------------------------------
+		// runCombinedAiReview mezcla varias reglas (englishOnly, semanticNaming, singleResponsibility,
+		// codeComplexity, commentLanguage) con distinta prioridad cada una; se etiquetan dentro del
+		// propio analizador (ver CHECK_TO_RULE en combinedAiAnalyzer.ts), no se puede envolver aqui con una sola prioridad.
 		await runCombinedAiReview(aiFunctionTasks, aiCommentTasks, findings, config.rules.aiReview);
+		await runWithPriority(findings, 'solidFrontendAi', () =>
+			runSolidFrontendReview(solidFrontendTasks, findings, config.rules.solidFrontendAi)
+		);
 
-		
 		// --------------------------------------------------------------------------------------
 		// ---- CONTRATOS: INTERFACES Y CLASES ABSTRACTAS ---------------------------------------
 		// Se ejecuta despues del ciclo porque una interfaz puede estar en un archivo y su implementacion en otro
 
 		const folderPaths = await collectFolderPaths(folder.uri, excludeMatchers);
 
-		if (shouldRunAnalyzer(projectMeta, 'frontend')) {
-			analyzeFolderStructure(folderPaths, folder.name, findings);
+		if (config.rules.folderNaming.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
+			runWithPriority(findings, 'folderNaming', () =>
+				analyzeFolderStructure(folderPaths, folder.name, findings)
+			);
 		}
 
 		if (config.rules.interfaces.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-			await analyzeInterfaceContracts(fileLines, folder.uri, excludePattern, findings, config.rules.interfaces);
+			await runWithPriority(findings, 'interfaces', () =>
+				analyzeInterfaceContracts(fileLines, folder.uri, excludePattern, findings, config.rules.interfaces)
+			);
 		}
 		if (config.rules.layers.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-			analyzeLayeredStructure(fileLines, folderPaths, findings, config.rules.layers);
+			runWithPriority(findings, 'layers', () =>
+				analyzeLayeredStructure(fileLines, folderPaths, findings, config.rules.layers)
+			);
 		}
 		if (config.rules.duplicateCode.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-			analyzeDuplicateCode(fileLines, changedLinesByFile, findings, config.rules.duplicateCode);
+			runWithPriority(findings, 'duplicateCode', () =>
+				analyzeDuplicateCode(fileLines, changedLinesByFile, findings, config.rules.duplicateCode)
+			);
 		}
 
 		// --------------------------------------------------------------------------------------
@@ -251,7 +335,9 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const lines = Buffer.from(bytes).toString('utf8').split('\n');
 
 			if(config.rules.envNaming.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeEnvVariables(lines, fileLabel, findings);
+				runWithPriority(findings, 'envNaming', () =>
+					analyzeEnvVariables(lines, fileLabel, findings)
+				);
 			}
 		}
 
@@ -266,7 +352,9 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			const classLenguage = extension === 'css' ? 'css' : 'html'; 
 
 			if (config.rules.cssClassNaming.enabled && (extension === 'html' || extension === 'css' || extension === 'jsx' || extension === 'tsx') && shouldRunAnalyzer(projectMeta, 'frontend')) {
-				analyzeCssClassNaming(lines, classLenguage, fileLabel, findings);
+				runWithPriority(findings, 'cssClassNaming', () =>
+					analyzeCssClassNaming(lines, classLenguage, fileLabel, findings)
+				);
 			}
 		}
 
@@ -274,7 +362,9 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		// ---- COMMITS ---------------------------------------------------------------------------
 
 		if (config.rules.commitMessage.enabled && shouldRunAnalyzer(projectMeta, 'shared')) {
-			analyzeCommitMessages(getCommitSubjects(folder.uri.fsPath, baseBranch), findings, config.rules.commitMessage);
+			runWithPriority(findings, 'commitMessage', () => 
+				analyzeCommitMessages(getCommitSubjects(folder.uri.fsPath, baseBranch), findings, config.rules.commitMessage)
+			);
 		}
 
 		// ----------------------------------------------------------------------------------------
@@ -301,7 +391,21 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 		// ---- REPORTE ---------------------------------------------------------------------------
 
 		// Se junta todo en un archivo de texto en la raiz del workspace y se abre para revisarlo
-		const reportContent = findings.length > 0 ? findings.join('\n') : 'No se encontraron hallazgos.';
+		function groupByPriority(findings: string[]): string {
+			const order: Array<'Alta' | 'Media' | 'Baja'> = ['Alta', 'Media', 'Baja'];
+			const groups: Record<string, string[]> = { 'Alta': [], 'Media': [], 'Baja': [] };
+
+			for (const f of findings) {
+				const match =f.match(/^\[(Alta|Media|Baja)\]/);
+				groups[match?.[1] ?? 'Media'].push(f);
+			}
+
+			return order
+				.filter(p => groups[p].length > 0)
+				.map(p => `=== Prioridad ${p.toUpperCase()} (${groups[p].length}) ===\n${groups[p].join('\n')}`)
+				.join('\n\n');
+		}
+		const reportContent = findings.length > 0 ? groupByPriority(findings) : 'No se encontraron hallazgos.';
 		const reportUri = vscode.Uri.joinPath(folder.uri, 'code-advisor-report.txt');
 		await vscode.workspace.fs.writeFile(reportUri, Buffer.from(reportContent, 'utf8'));
 

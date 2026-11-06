@@ -119,7 +119,7 @@ function checkNestedTernaries(lines: string[], fileLabel: string, findings: stri
 
 // Revisa que los if/else if/else de una sola instruccion usen llaves, y que no haya
 // operadores ternarios anidados.
-export function analyzeIfStatements(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>): void {
+export function analyzeIfStatements(lines: string[], fileLabel: string, findings: string[], changedLines: Set<number>, checkTernaries: boolean): void {
 	lines.forEach((rawLine, i) => {
 		if (!changedLines.has(i + 1)) { return; }
 		const line = stripLineComment(rawLine);
@@ -147,5 +147,7 @@ export function analyzeIfStatements(lines: string[], fileLabel: string, findings
 		}
 	});
 
-	checkNestedTernaries(lines, fileLabel, findings, changedLines);
+	if (checkTernaries) {
+		checkNestedTernaries(lines, fileLabel, findings, changedLines);
+	}
 }

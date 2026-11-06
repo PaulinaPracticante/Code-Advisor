@@ -4,6 +4,7 @@
 
 import { json } from "stream/consumers";
 import { callClaude } from "../../shared/claudeClient";
+import { RULE_PRIORITIES } from "../../config/configLoader";
 
 const MIN_FUNCTION_LINES = 5;
 
@@ -37,6 +38,18 @@ export interface AiReviewConfig {
 }
 
 type FunctionCheckName = 'idioma_ingles' | 'coherencia_nombres' | 'responsabilidad_unica' | 'complejidad';
+
+// a que regla de RULE_PRIORITIES corresponde cada check, para etiquetar la prioridad del hallazgo
+const CHECK_TO_RULE: Record<FunctionCheckName, string> = {
+    idioma_ingles: 'englishOnly',
+    coherencia_nombres: 'semanticNaming',
+    responsabilidad_unica: 'singleResponsibility',
+    complejidad: 'codeComplexity',
+};
+
+function tag(ruleName: string, message: string): string {
+    return `[${RULE_PRIORITIES[ruleName] ?? 'Media'}] ${message}`;
+}
 
 interface CombinedFunctionFinding {
     id: string;
@@ -149,9 +162,9 @@ function applyFunctionFindings(
             fileNameReported.add(key);
 
             if (finding.check === 'idioma_ingles') {
-                findings.push(task.fileLabel + ' - El nombre del archivo "' + finding.found + '" esta en español, usa ingles (' + finding.message + ')');
+                findings.push(tag(CHECK_TO_RULE[finding.check], task.fileLabel + ' - El nombre del archivo "' + finding.found + '" esta en español, usa ingles (' + finding.message + ')'));
             } else if (finding.check === 'coherencia_nombres') {
-                findings.push(task.fileLabel + ' - El nombre del archivo "' + finding.found + '" no es coherente con su contenido (' + finding.message + ')');
+                findings.push(tag(CHECK_TO_RULE[finding.check], task.fileLabel + ' - El nombre del archivo "' + finding.found + '" no es coherente con su contenido (' + finding.message + ')'));
             }
             continue;
         }
@@ -160,7 +173,7 @@ function applyFunctionFindings(
 
         switch (finding.check) {
             case 'idioma_ingles':
-                findings.push(task.fileLabel + ':' + absoluteLine + ' - "' + finding.found + '" esta en español, usa ingles (' + finding.message + ')');
+                findings.push(tag(CHECK_TO_RULE[finding.check], task.fileLabel + ':' + absoluteLine + ' - "' + finding.found + '" esta en español, usa ingles (' + finding.message + ')'));
                 break;
 
             case 'coherencia_nombres': {
@@ -170,16 +183,16 @@ function applyFunctionFindings(
                     if (classNameReported.has(key)) { continue; }
                     classNameReported.add(key);
                 }
-                findings.push(task.fileLabel + ':' + absoluteLine + ' - "' + finding.found + '" no es un nombre coherente con lo que hace (' + finding.message + ')');
+                findings.push(tag(CHECK_TO_RULE[finding.check], task.fileLabel + ':' + absoluteLine + ' - "' + finding.found + '" no es un nombre coherente con lo que hace (' + finding.message + ')'));
                 break;
             }
 
             case 'responsabilidad_unica':
-                findings.push(task.fileLabel + ':' + absoluteLine + ' - La funcion "' + task.functionName + '" hace mas de una cosa: ' + finding.found + ' (' + finding.message + ')');
+                findings.push(tag(CHECK_TO_RULE[finding.check], task.fileLabel + ':' + absoluteLine + ' - La funcion "' + task.functionName + '" hace mas de una cosa: ' + finding.found + ' (' + finding.message + ')'));
                 break;
 
             case 'complejidad':
-                findings.push(task.fileLabel + ':' + absoluteLine + ' - La funcion "' + task.functionName + '" tiene logica demasiado compleja: ' + finding.found + ' (' + finding.message + ')');
+                findings.push(tag(CHECK_TO_RULE[finding.check], task.fileLabel + ':' + absoluteLine + ' - La funcion "' + task.functionName + '" tiene logica demasiado compleja: ' + finding.found + ' (' + finding.message + ')'));
                 break;
         }
     }
@@ -193,7 +206,7 @@ function applyCommentFindings(
     for (const finding of commentFindings) {
         const task = tasksById.get(finding.id);
         if (!task) { continue; }
-        findings.push(task.fileLabel + ':' + task.line + ' - El comentario "' + task.text + '" no esta en español, usa español (' + finding.message + ')'); 
+        findings.push(tag('commentLanguage', task.fileLabel + ':' + task.line + ' - El comentario "' + task.text + '" no esta en español, usa español (' + finding.message + ')'));
     }
 }
 

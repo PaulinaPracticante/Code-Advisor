@@ -22,16 +22,19 @@ export function matchesCase(name: string, caseStyle: CaseStyle): boolean {
 	}
 }
 
-//interfaz para describir como se debe de ver el codigo valido
-//CaseStyle es para los estilos de nombre
-//RegExp regex para encontrar declaraciones dentro de la linea del codigo
-export interface LanguageNamingConfig {
+//estilos de nombre por categoria, configurables desde code-advisor.config.json (rules.naming)
+export interface NamingCaseStyles {
 	classCase: CaseStyle;
 	functionCase: CaseStyle;
 	methodCase: CaseStyle;
 	variableCase: CaseStyle;
 	constantCase: CaseStyle;
 	componentCase?: CaseStyle;
+}
+
+//interfaz para describir como se debe de ver el codigo valido
+//RegExp regex para encontrar declaraciones dentro de la linea del codigo
+export interface LanguageNamingConfig extends NamingCaseStyles {
 	classPatterns: RegExp[];
 	functionPatterns: RegExp[]; // Funciones fuera de una clase (vacio si el lenguaje no las tiene, p. ej. C#)
 	methodPatterns: RegExp[]; // Funciones/metodos dentro de una clase
@@ -163,3 +166,22 @@ export const EXTENSION_TO_LANGUAGE_ID: Record<string, string> = {
 	php: 'php',
 	cs: 'csharp',
 };
+
+//conecta el languageId con la clave que usara en rules.naming del config del usuario
+const LANGUAGE_ID_TO_NAMING_KEY: Record<string, 'javascript' | 'php' | 'csharp'> = {
+	javascript: 'javascript',
+	javascriptreact: 'javascript',
+	typescript: 'javascript',
+	typescriptreact: 'javascript',
+	php: 'php',
+	csharp: 'csharp',
+};
+
+//busca los estilos configurados por el usuario para el lenguaje de ese archivo
+export function getNamingCaseStyles<T extends NamingCaseStyles>(
+	perLanguage: Record<'javascript' | 'php' | 'csharp', T>,
+	languageId: string
+): T | undefined {
+	const key = LANGUAGE_ID_TO_NAMING_KEY[languageId];
+	return key ? perLanguage[key] : undefined;
+}

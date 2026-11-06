@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { Minimatch } from 'minimatch';
+import type { NamingCaseStyles } from './namingConfig';
 
 export interface RuleToggle {
     enabled: boolean;
@@ -120,6 +121,21 @@ export interface CommitMessageConfig extends RuleToggle {
     pattern: string;
 }
 
+export interface NamingConfig extends RuleToggle {
+    javascript: NamingCaseStyles;
+    php: NamingCaseStyles;
+    csharp: NamingCaseStyles;
+}
+
+export interface SolidFrontendConfig extends RuleToggle {
+    maxProps: number;
+}
+
+export interface SolidFrontendAiConfig extends RuleToggle {
+    model: string;
+    maxTokens: number;
+}
+
 // reglas que todavia no tienen parametros propios configurables, solo enabled/disabled
 export interface CodeAdvisorConfig {
     exclude: string[];
@@ -132,13 +148,14 @@ export interface CodeAdvisorConfig {
         layers: LayersConfig;
         interfaces: InterfacesConfig;
         indentation: RuleToggle;
+        folderNaming: RuleToggle;
         ifBraces: RuleToggle;
         ternaries: RuleToggle;
         varUsage: RuleToggle;
         async: RuleToggle;
         stringInterpolation: RuleToggle;
         exceptionHandling: RuleToggle;
-        naming: RuleToggle;
+        naming: NamingConfig;
         envNaming: RuleToggle;
         fileNaming: RuleToggle;
         cssClassNaming: RuleToggle;
@@ -155,6 +172,8 @@ export interface CodeAdvisorConfig {
         transactions: RuleToggle;
         commitMessage: CommitMessageConfig;
         aiReview: AiReviewConfig;
+        solidFrontend: SolidFrontendConfig;
+        solidFrontendAi: SolidFrontendAiConfig;
     };
 }
 
@@ -232,19 +251,27 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
         codeComplexity: { enabled: true, model: 'claude-sonnet-5-5' },
         commentLanguage: { enabled: true, model: 'claude-sonnet-5-5' },
         aiReview: { model: 'claude-sonnet-5-5', maxTokens: 8000 },
+        solidFrontend: { enabled: true, maxProps: 8 },
+        solidFrontendAi: { enabled: true, model: 'claude-sonnet-5-5', maxTokens: 4096 },
         queryViews: { enabled: true, maxJoins: 3, maxColumns: 15, maxParameters: 5 },
         tableAlias: { enabled: true },
         transactions: { enabled: true },
         // iniciales en mayuscula + ":" o "_" + descripcion, ej. ABCD:Corrige validacion del login
         commitMessage: { enabled: true, pattern: '^[A-Z]{2,5}[:_]\\s?\\S.*$' },
         indentation: { enabled: true },
+        folderNaming: { enabled: true },
         ifBraces: { enabled: true },
         ternaries: { enabled: true },
         varUsage: { enabled: true },
         async: { enabled: true },
         stringInterpolation: { enabled: true },
         exceptionHandling: { enabled: true },
-        naming: { enabled: true },
+        naming: {
+            enabled: true,
+            javascript: { classCase: 'PascalCase', functionCase: 'camelCase', methodCase: 'camelCase', variableCase: 'camelCase', constantCase: 'camelCase', componentCase: 'PascalCase' },
+            php: { classCase: 'PascalCase', functionCase: 'camelCase', methodCase: 'camelCase', variableCase: 'camelCase', constantCase: 'camelCase' },
+            csharp: { classCase: 'PascalCase', functionCase: 'camelCase', methodCase: 'camelCase', variableCase: 'camelCase', constantCase: 'camelCase' },
+        },
         envNaming: { enabled: true },
         fileNaming: { enabled: true },
         cssClassNaming: { enabled: true },
@@ -289,4 +316,45 @@ export function buildExcludeMatchers(config: CodeAdvisorConfig): Minimatch[] {
 export function isExluded(fileLabel: string, matchers: Minimatch[]): boolean {
     const normalized = fileLabel.replace(/\\/g, '/');
     return matchers.some(matcher => matcher.match(normalized));
+}
+
+
+export type Priority = 'Alta' | 'Media' | 'Baja';
+
+export const RULE_PRIORITIES: Record<string, Priority> = {
+    transactions: 'Alta',
+    exceptionHandling: 'Alta',
+    async: 'Alta',
+    objectUsage: 'Alta',
+    requestModels: 'Alta',
+    requestHandlers: 'Alta',
+    duplicateCode: 'Alta',
+    folderNaming: 'Alta',
+
+    layers: 'Media',
+    interfaces: 'Media',
+    singleResponsibility: 'Media',
+    codeComplexity: 'Media',
+    dtoAutoMapper: 'Media',
+    queryViews: 'Media',
+    linq: 'Media',
+    solidFrontend: 'Media',
+    solidFrontendAi: 'Media',
+    componentLocation: 'Media',
+
+    commitMessage: 'Baja',
+    englishOnly: 'Baja',
+    naming: 'Baja',
+    semanticNaming: 'Baja',
+    envNaming: 'Baja',
+    fileNaming: 'Baja',
+    cssClassNaming: 'Baja',
+    varUsage: 'Baja',
+    ifBraces: 'Baja',
+    ternaries: 'Baja',
+    stringInterpolation: 'Baja',
+    parameters: 'Baja',
+    tableAlias: 'Baja',
+    indentation: 'Baja',
+    commentLanguage: 'Baja',
 }
