@@ -2,7 +2,7 @@
 // ---- VERIFICACION DE NOMBRES (CLASES, FUNCIONES, METODOS, VARIABLES, ETC.) -----
 // -------------------------------------------------------------------------------
 
-import { CaseStyle, LANGUAGE_NAMING_CONFIGS, LanguageNamingConfig, matchesCase } from '../../config/namingConfig';
+import { CaseStyle, LANGUAGE_NAMING_CONFIGS, LanguageNamingConfig, NamingCaseStyles, matchesCase } from '../../config/namingConfig';
 
 function matchFirstGroup(text: string, patterns: RegExp[]): string | null {
 	for (const pattern of patterns) { //prueba cada regex en orden
@@ -138,24 +138,27 @@ function reportInvalidNames(names: string[], caseStyle: CaseStyle, label: string
 }
 
 // Revisa clases, funciones, metodos, variables y constantes de un archivo y agrega los hallazgos al arreglo de resultados
-export function analyzeNaming(lines: string[], languageId: string, fileLabel: string, findings: string[]): void {
+export function analyzeNaming(lines: string[], languageId: string, fileLabel: string, findings: string[], caseStyles?: NamingCaseStyles): void {
 	const namingConfig = LANGUAGE_NAMING_CONFIGS[languageId]; //busca la configuracion que le corresponde en LANGUAGE_NAMING_CONFIGS
 
 	if (!namingConfig) { //si no hay config para ese lenguaje se ignora el archivo
 		return;
 	}
 
+	//si vienen estilos del code-advisor.config.json, sobreescriben los defaults de namingConfig.ts
+	const effectiveConfig: LanguageNamingConfig = caseStyles ? { ...namingConfig, ...caseStyles } : namingConfig;
+
 	//llama a extractNamesByCategory para sacar los 5 arreglos de nombres
-	const { classNames, functionNames, methodNames, variableNames, constantNames, componentNames, hookNames } = extractNamesByCategory(lines, namingConfig);
+	const { classNames, functionNames, methodNames, variableNames, constantNames, componentNames, hookNames } = extractNamesByCategory(lines, effectiveConfig);
 
 	//se llama a esta funcion una vez por categoria usando el CaseStyle que le corresponde a cada uno
-	reportInvalidNames(classNames, namingConfig.classCase, 'La clase', fileLabel, findings);
-	reportInvalidNames(functionNames, namingConfig.functionCase, 'La función', fileLabel, findings);
-	reportInvalidNames(methodNames, namingConfig.methodCase, 'El método', fileLabel, findings);
-	reportInvalidNames(variableNames, namingConfig.variableCase, 'La variable', fileLabel, findings);
-	reportInvalidNames(constantNames, namingConfig.constantCase, 'La constante', fileLabel, findings);
-	if (namingConfig.componentCase) {
-		reportInvalidNames(componentNames, namingConfig.componentCase, 'El componente', fileLabel, findings);
-		reportInvalidNames(hookNames, namingConfig.functionCase, 'El hook', fileLabel, findings);
+	reportInvalidNames(classNames, effectiveConfig.classCase, 'La clase', fileLabel, findings);
+	reportInvalidNames(functionNames, effectiveConfig.functionCase, 'La función', fileLabel, findings);
+	reportInvalidNames(methodNames, effectiveConfig.methodCase, 'El método', fileLabel, findings);
+	reportInvalidNames(variableNames, effectiveConfig.variableCase, 'La variable', fileLabel, findings);
+	reportInvalidNames(constantNames, effectiveConfig.constantCase, 'La constante', fileLabel, findings);
+	if (effectiveConfig.componentCase) {
+		reportInvalidNames(componentNames, effectiveConfig.componentCase, 'El componente', fileLabel, findings);
+		reportInvalidNames(hookNames, effectiveConfig.functionCase, 'El hook', fileLabel, findings);
 	}
 }
