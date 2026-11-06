@@ -330,6 +330,7 @@ export const RULE_PRIORITIES: Record<string, Priority> = {
     requestHandlers: 'Alta',
     duplicateCode: 'Alta',
     folderNaming: 'Alta',
+    projectGuidelines: 'Alta',
 
     layers: 'Media',
     interfaces: 'Media',

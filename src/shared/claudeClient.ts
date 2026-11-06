@@ -5,6 +5,7 @@ const ANTHROPIC_VERSION = '2023-06-01'; //header requerido por Antropic para fij
 export interface ClaudeClientOptions {
     model: string; //que modelo usar 
     maxTokens?: number; //limite opcional de tokens por salida 
+    system?: string; //contexto fijo , se cachea del lado de Anthropic
 }
 
 // funcion que recibe el prompt, las options y devuelve la respuesta como string
@@ -17,6 +18,18 @@ export async function callClaude(
         throw new Error('No hay una API key de Claude configurada (ANTHROPIC_API_KEY en src/.env)');
     }
 
+    const body: Record<string, unknown> = {
+        model: options.model,
+        max_tokens: options.maxTokens ?? 1024,
+        messages: [{role: 'user', content: prompt}],
+    }
+
+    if (options.system) {
+        body.system = [
+            { type: 'text', text: options.system, cache_control: { type: 'ephemeral'} },
+        ];
+    }
+
     //llamada http
     const response = await fetch(CLAUDE_API_URL, {
         method: 'POST', //post al endpoint
@@ -25,11 +38,7 @@ export async function callClaude(
             'x-api-key': apiKey,
             'anthropic-version': ANTHROPIC_VERSION,
         },
-        body: JSON.stringify({
-            model: options.model, //modelo requerido 
-            max_tokens: options.maxTokens ?? 1024, 
-            messages: [{ role: 'user', content: prompt }], //un solo mensaje de rol use con el prompt como contenido 
-        }),
+        body: JSON.stringify(body),
     });
 
     //si hay un error en el mensaje que devolvio la api key, muestra el mensaje de error 

@@ -35,6 +35,7 @@ import { extractComments } from '../shared/commentExtraction';
 import { AiCommentTask, AiFunctionTask, MIN_FUNCTION_LINES, runCombinedAiReview } from '../analyzers/ai/combinedAiAnalyzer';
 import { analyzeSolidFrontendIsp } from '../analyzers/structure/solidFrontendAnalyzer';
 import { collectSolidFrontendTask, runSolidFrontendReview, SolidFrontendTask } from '../analyzers/ai/solidFrontendAnalyzer';
+import { loadProjectGuidelines } from '../shared/projectGuidelines';
 
 function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
 	try {
@@ -88,6 +89,7 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 		const config = await loadConfig(folder.uri);
 		const projectMeta  = await detectProjectMeta(folder.uri);
+		const guidelines = await loadProjectGuidelines(folder.uri);
 		const excludeMatchers = buildExcludeMatchers(config);
 
 		const findings: string[] = []; // Aqui se van juntando los hallazgos de todos los archivos del proyecto
@@ -191,11 +193,13 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 			if (englishEnabled || semanticEnabled || responsabilityEnabled || complexityEnabled) {
 				for (const block of collectChangesFunction(lines, changedLines)) {
 					const longEnough = block.endLine - block.startLine + 1 >= MIN_FUNCTION_LINES;
+					const guidelinesEnabled = guidelines !== null;
 					const checks = {
 						english: englishEnabled,
 						semantic: semanticEnabled,
 						singleResponsability: responsabilityEnabled && longEnough,
 						complexity: complexityEnabled && longEnough,
+						guidelines: guidelinesEnabled,
 					};
 
 					if (!checks.english && !checks.semantic && !checks.singleResponsability && !checks.complexity) { continue; }
@@ -290,10 +294,11 @@ export function registerCodeReviewerCommand(context: vscode.ExtensionContext): v
 
 		// -------------------------------------------------------------------------------------
 		// ---- IA: UNA SOLA LLAMADA PARA TODO EL PR -------------------------------------------
+				
 		// runCombinedAiReview mezcla varias reglas (englishOnly, semanticNaming, singleResponsibility,
 		// codeComplexity, commentLanguage) con distinta prioridad cada una; se etiquetan dentro del
 		// propio analizador (ver CHECK_TO_RULE en combinedAiAnalyzer.ts), no se puede envolver aqui con una sola prioridad.
-		await runCombinedAiReview(aiFunctionTasks, aiCommentTasks, findings, config.rules.aiReview);
+		await runCombinedAiReview(aiFunctionTasks, aiCommentTasks, findings, config.rules.aiReview, guidelines);
 		await runWithPriority(findings, 'solidFrontendAi', () =>
 			runSolidFrontendReview(solidFrontendTasks, findings, config.rules.solidFrontendAi)
 		);
