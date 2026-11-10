@@ -11,10 +11,36 @@
   ],
   "activationEvents": [
     "onCommand:codeadvisor.codeReviewer",
-    "onCommand:codeadvisor.gitVerification"
+    "onCommand:codeadvisor.gitVerification",
+    "onStartupFinished"
   ],
+  "extensionDependencies": ["vscode.git"],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": ""
+    }
+  },
   "main": "./dist/extension.js",
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeadvisor",
+          "title": "CodeAdvisor",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "codeadvisor": [
+        {
+          "type": "webview",
+          "id": "codeadvisor.findingsView",
+          "name": "Hallazgos"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "codeadvisor.gitVerification",

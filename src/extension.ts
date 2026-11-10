@@ -1,7 +1,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
-import { registerCodeReviewerCommand } from './commands/codeReviewerCommand';
+import { registerCodeReviewerCommand } from './ui/commands/codeReviewerCommand';
+import { registerCommitWatcher } from './ui/commitWatcher';
+import { publishDiagnostics } from './ui/diagnostics';
+import { registerDecorationRefresh } from './ui/decorations';
+import { FindingsPanel } from './ui/findingsPanel';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -31,8 +35,18 @@ export function activate(context: vscode.ExtensionContext) {
 
 	});
 
+	const diagnosticCollection = vscode.languages.createDiagnosticCollection('codeadvisor');
+	context.subscriptions.push(diagnosticCollection);
+
+	const findingsPanel = new FindingsPanel();
+	context.subscriptions.push(
+		vscode.window.registerWebviewViewProvider(FindingsPanel.viewType, findingsPanel)
+	);
+
 	// comando para revisar el codigo de todo el proyecto (workspace)
-	registerCodeReviewerCommand(context);
+	registerCodeReviewerCommand(context, diagnosticCollection, findingsPanel);
+	registerCommitWatcher(context, diagnosticCollection, findingsPanel);
+	registerDecorationRefresh(context);
 
 	context.subscriptions.push(disposable); //Se registran los comandos
 }
