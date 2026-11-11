@@ -31,7 +31,9 @@ export function publishDiagnostics(
         if (!hasRealFile(finding)) { continue; } //descarta los que no tienen un archivo real
 
         const line = finding.line !== undefined ? finding.line -1 : 0; //calcula la linea 
-        const range = new vscode.Range(line, 0, line, 1000); //columna grande, vscode la recorta visualmente
+        //los de prioridad baja solo subrayan el inicio de la linea para no llenar el editor de subrayados
+        const endColumn = finding.severity === 'Baja' ? 1 : 1000; //columna grande, vscode la recorta visualmente
+        const range = new vscode.Range(line, 0, line, endColumn);
 
         //arma el mensaje
         const message = finding.suggestion
