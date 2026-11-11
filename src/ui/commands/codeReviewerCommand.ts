@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { execFileSync } from 'child_process';
-import { loadConfig, buildExcludeMatchers, isExluded } from '../../engine/config/configLoader';
+import { loadConfig, buildExcludeMatchers, isExluded, CodeAdvisorConfig } from '../../engine/config/configLoader';
 import { getChangedLineNumbers, getCommitSubjects } from '../../engine/shared/diffUtils';
 import { EXTENSION_TO_LANGUAGE_ID, getNamingCaseStyles } from '../../engine/config/namingConfig';
 import { analyzeNaming } from '../../engine/analyzers/style/namingAnalyzer';
@@ -25,7 +25,7 @@ import { analyzeCssClassNaming } from '../../engine/analyzers/style/cssClassNami
 import { analyzeRequestHandlers } from '../../engine/analyzers/structure/requestHandlerAnalyzer';
 import { analyzeComponentLocation } from '../../engine/analyzers/structure/componentLocationAnalyzer';
 import { analyzeFolderStructure } from '../../engine/analyzers/structure/folderNamingAnalyzer';
-import { detectProjectMeta, shouldRunAnalyzer } from '../../engine/shared/projectProfile';
+import { detectProjectMeta, shouldRunAnalyzer, ProjectMeta } from '../../engine/shared/projectProfile';
 import { analyzeQueryViews } from '../../engine/analyzers/structure/queryViewAnalyzer';
 import { analyzeTableAliases } from '../../engine/analyzers/structure/tableAliasAnalyzer';
 import { analyzeTransactions } from '../../engine/analyzers/structure/transactionAnalyzer';
@@ -62,11 +62,111 @@ function getChangedFile(workspaceRoot: string, baseBranch: string): string[] {
 	}
 }
 
+function getCurrentCommit(workspaceRoot: string): string {
+	return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workspaceRoot, encoding: 'utf8' }).trim();
+}
+
+// corre sobre un solo archivo todas las reglas estaticas (sin IA, sin analizadores de todo el proyecto);
+// se usa tanto en el analisis completo como en el re-chequeo al guardar (ver saveWatcher.ts)
+export function analyzeFileStatic(
+	lines: string[],
+	fileLabel: string,
+	folderName: string,
+	changedLines: Set<number>,
+	config: CodeAdvisorConfig,
+	projectMeta: ProjectMeta | null,
+	findings: Finding[]
+): void {
+	if (config.rules.parameters.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			analyzeParameters(lines, fileLabel, findings, changedLines, config.rules.parameters)
+	}
+
+	if (config.rules.requestModels.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			analyzeRequestModels(lines, fileLabel, findings, changedLines, config.rules.requestModels)
+	}
+
+	if (config.rules.dtoAutoMapper.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines, config.rules.dtoAutoMapper)
+	}
+
+	if (config.rules.linq.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			analyzeLinqUsage(lines, fileLabel, findings, changedLines, config.rules.linq)
+	}
+
+	if (config.rules.objectUsage.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage)
+	}
+
+	if (config.rules.requestHandlers.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers)
+	}
+
+	if (config.rules.solidFrontend.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
+			analyzeSolidFrontendIsp(lines, fileLabel, findings, config.rules.solidFrontend)
+	}
+
+	if (config.rules.queryViews.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			analyzeQueryViews(lines, fileLabel, findings, changedLines, config.rules.queryViews)
+	}
+
+	if (config.rules.tableAlias.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			analyzeTableAliases(lines, fileLabel, findings, changedLines)
+	}
+
+	if (config.rules.transactions.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+			analyzeTransactions(lines, fileLabel, findings, changedLines)
+	}
+
+	if (config.rules.indentation.enabled) {
+			analyzeIndentation(lines, fileLabel, findings, changedLines)
+	}
+	if (config.rules.ifBraces.enabled && shouldRunAnalyzer(projectMeta, 'shared')) {
+			analyzeIfStatements(lines, fileLabel, findings, changedLines, config.rules.ternaries.enabled)
+	}
+	if (config.rules.async.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+		analyzeAsyncUsage(lines, fileLabel, findings, changedLines);
+	}
+	if (config.rules.varUsage.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+		analyzeVarUsage(lines, fileLabel, findings, changedLines);
+	}
+	if (config.rules.stringInterpolation.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+		analyzeStringInterpolation(lines, fileLabel, findings, changedLines);
+	}
+	if (config.rules.exceptionHandling.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+		analyzeExceptionHandling(lines, fileLabel, findings, changedLines);
+	}
+
+	const extension = fileLabel.split('.').pop() ?? '';
+	const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
+	if (languageId && config.rules.naming.enabled) {
+		analyzeNaming(lines, languageId, fileLabel, findings, getNamingCaseStyles(config.rules.naming, languageId))
+	}
+
+	if (config.rules.fileNaming.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
+		analyzeFileNaming(lines, fileLabel, findings, folderName)
+	}
+
+	if (config.rules.componentLocation.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
+		analyzeComponentLocation(lines, fileLabel, findings, config.rules.componentLocation)
+	}
+}
+
 export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCollection: vscode.DiagnosticCollection, findingsPanel: FindingsPanel): Promise<void> {
 
 
 		if (!folder) { //Si no hay una carpeta abierta, se muestra un mensaje de error
 			vscode.window.showErrorMessage('Abra una carpeta que sea un repositorio de git primero');
+			return;
+		}
+
+		const commit = getCurrentCommit(folder.uri.fsPath);
+		const cachedFindings = findingsPanel.getCachedFindings(folder, commit);
+		if (cachedFindings) {
+			publishDiagnostics(diagnosticCollection, folder, cachedFindings);
+			updateDecorations(cachedFindings);
+			vscode.window.showInformationMessage(
+				'CodeAdvisor: este commit ya fue analizado, se muestran los hallazgos guardados'
+			);
 			return;
 		}
 
@@ -121,33 +221,7 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 			fileLines.set(fileLabel, lines);
 			changedLinesByFile.set(fileLabel, changedLines);
 
-			if (config.rules.parameters.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-					analyzeParameters(lines, fileLabel, findings, changedLines, config.rules.parameters)
-			}
-
-			if (config.rules.requestModels.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-					analyzeRequestModels(lines, fileLabel, findings, changedLines, config.rules.requestModels)
-			}
-
-			if (config.rules.dtoAutoMapper.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-					analyzeDtoAutoMapper(lines, fileLabel, findings, changedLines, config.rules.dtoAutoMapper)
-			}
-
-			if (config.rules.linq.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-					analyzeLinqUsage(lines, fileLabel, findings, changedLines, config.rules.linq)
-			}
-
-			if (config.rules.objectUsage.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-					analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage)
-			}
-
-			if (config.rules.requestHandlers.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-					analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers)
-			}
-
-			if (config.rules.solidFrontend.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
-					analyzeSolidFrontendIsp(lines, fileLabel, findings, config.rules.solidFrontend)
-			}
+			analyzeFileStatic(lines, fileLabel, folder.name, changedLines, config, projectMeta, findings);
 
 			if (config.rules.solidFrontendAi.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
 				const task = collectSolidFrontendTask(lines, fileLabel, changedLines, 'comp' + (solidFrontendIdCounter++));
@@ -198,51 +272,6 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 						text: comment.text,
 					});
 				}
-			}
-
-			if (config.rules.queryViews.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-					analyzeQueryViews(lines, fileLabel, findings, changedLines, config.rules.queryViews)
-			}
-
-			if (config.rules.tableAlias.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-					analyzeTableAliases(lines, fileLabel, findings, changedLines)
-			}
-
-			if (config.rules.transactions.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-					analyzeTransactions(lines, fileLabel, findings, changedLines)
-			}
-
-			if (config.rules.indentation.enabled) {
-					analyzeIndentation(lines, fileLabel, findings, changedLines)
-			}
-			if (config.rules.ifBraces.enabled && shouldRunAnalyzer(projectMeta, 'shared')) {
-					analyzeIfStatements(lines, fileLabel, findings, changedLines, config.rules.ternaries.enabled)
-			}
-			if (config.rules.async.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeAsyncUsage(lines, fileLabel, findings, changedLines);
-			}
-			if (config.rules.varUsage.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeVarUsage(lines, fileLabel, findings, changedLines);
-			}
-			if (config.rules.stringInterpolation.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeStringInterpolation(lines, fileLabel, findings, changedLines);
-			}
-			if (config.rules.exceptionHandling.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
-				analyzeExceptionHandling(lines, fileLabel, findings, changedLines);
-			}
-
-			const extension = fileLabel.split('.').pop() ?? '';
-			const languageId = EXTENSION_TO_LANGUAGE_ID[extension]; // Se obtiene el languageId a partir de la extension del archivo
-			if (languageId && config.rules.naming.enabled) {
-				analyzeNaming(lines, languageId, fileLabel, findings, getNamingCaseStyles(config.rules.naming, languageId))
-			}
-
-			if (config.rules.fileNaming.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
-				analyzeFileNaming(lines, fileLabel, findings, folder.name)
-			}
-
-			if (config.rules.componentLocation.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
-				analyzeComponentLocation(lines, fileLabel, findings, config.rules.componentLocation)
 			}
 
 		}
@@ -353,7 +382,7 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		}
 		publishDiagnostics(diagnosticCollection, folder, findings);
 		updateDecorations(findings);
-		findingsPanel.update(folder, findings);
+		findingsPanel.update(folder, findings, commit);
 		const reportContent = findings.length > 0 ? groupByPriority(findings) : 'No se encontraron hallazgos.';
 		const reportUri = vscode.Uri.joinPath(folder.uri, 'code-advisor-report.txt');
 		await vscode.workspace.fs.writeFile(reportUri, Buffer.from(reportContent, 'utf8'));

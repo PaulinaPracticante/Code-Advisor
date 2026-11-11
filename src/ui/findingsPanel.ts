@@ -5,6 +5,14 @@
 import * as vscode from 'vscode';
 import { Finding, Severity } from '../engine/shared/finding';
 
+const FINDINGS_STATE_KEY = 'codeadvisor.lastFindings';
+
+interface PersistedFindings {
+    folderUri: string;
+    commit: string;
+    findings: Finding[];
+}
+
 //Genera strig aleatorio de 32 caracteres
 function getNonce(): string {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -56,11 +64,54 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
         });
     }
 
-    //metodo publcio, cada vez que termina un analisi actualiza folder, findings
-    public update(folder: vscode.WorkspaceFolder, findings: Finding[]): void {
+    constructor(private readonly state: vscode.Memento) {
+        this.restore();
+    }
+
+    private lastCommit?: string;
+
+    private restore(): void {
+        const saved = this.state.get<PersistedFindings>(FINDINGS_STATE_KEY);
+        if (!saved) { return; }
+
+        const uri = vscode.Uri.parse(saved.folderUri);
+        const folder = vscode.workspace.getWorkspaceFolder(uri) ?? vscode.workspace.workspaceFolders?.[0];
+        if (!folder) { return; }
+
         this.folder = folder;
+        this.lastCommit = saved.commit;
+        this.findings = saved.findings;
+    }
+
+    public getRestoredResult(): { folder: vscode.WorkspaceFolder; findings: Finding[] } | undefined {
+        if (!this.folder || this.findings.length === 0) { return undefined; }
+        return { folder: this.folder, findings: this.findings };
+    }
+
+    public getCachedFindings(folder: vscode.WorkspaceFolder, commit: string): Finding[] | undefined {
+        if (this.folder?.uri.toString() === folder.uri.toString() && this.lastCommit === commit) {
+            return this.findings;
+        }
+        return undefined;
+    }
+
+    //metodo publcio, cada vez que termina un analisi actualiza folder, findings
+    public update(folder: vscode.WorkspaceFolder, findings: Finding[], commit: string): void {
+        this.folder = folder;
+        this.lastCommit = commit;
         this.findings = sortFindings(findings); //el indice de cada hallazgo es el de la lista ordenada, el panel lo usa para abrirlo
         this.renderFindings();
+
+        void this.state.update(FINDINGS_STATE_KEY, {
+            folderUri: folder.uri.toString(),
+            commit,
+            findings: this.findings,
+        } satisfies PersistedFindings); 
+    }
+
+    public getCurrentState(): { folder: vscode.WorkspaceFolder; findings: Finding[]; commit?: string } | undefined {
+        if (!this.folder) { return undefined; }
+        return { folder: this.folder, findings: this.findings, commit: this.lastCommit };
     }
 
     //envia findings actuales
