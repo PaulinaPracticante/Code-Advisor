@@ -1,8 +1,7 @@
 import * as vscode from 'vscode';
 import { Minimatch } from 'minimatch';
 import type { NamingCaseStyles } from './namingConfig';
-import { MANAGER_PUBLIC_KEY } from './managerKey';
-import { splitSignedConfig, verifyConfig } from './configSignature';
+
 
 export interface RuleToggle {
     enabled: boolean;
@@ -295,8 +294,6 @@ function deepMerge<T>(base: T, override: unknown): T {
     return result as T;
 }
 
-//proyectos a los que ya se les aviso que su configuracion no es valida, para no repetir el aviso cada vez que se guarda un archivo
-const warnedProjects = new Set<string>();
 
 //aplica las prioridades que cambio el gerente sobre las de por defecto, ignora lo que no sea Alta, Media o Baja
 function applyPriorities(overrides: unknown): void {
@@ -309,25 +306,10 @@ function applyPriorities(overrides: unknown): void {
 
 export async function loadConfig(workspaceRoot: vscode.Uri): Promise<CodeAdvisorConfig> {
     const configUri = vscode.Uri.joinPath(workspaceRoot, CONFIG_FILE_NAME);
-    const projectKey = workspaceRoot.toString();
     try {
         const bytes = await vscode.workspace.fs.readFile(configUri);
-        const signed = splitSignedConfig(JSON.parse(Buffer.from(bytes).toString('utf8')));
-
-        //con la llave publica del gerente dentro de la extension, solo se acepta la configuracion que el gerente firmo
-        if (MANAGER_PUBLIC_KEY !== '' && !(signed && verifyConfig(signed.content, signed.signature, MANAGER_PUBLIC_KEY))) {
-            if (!warnedProjects.has(projectKey)) {
-                warnedProjects.add(projectKey);
-                vscode.window.showWarningMessage(
-                    `Code Advisor: "${CONFIG_FILE_NAME}" no esta firmado por el gerente o fue modificado; se uso la configuracion por defecto.`
-                );
-            }
-            applyPriorities(undefined);
-            return DEFAULT_CONFIG;
-        }
-
-        warnedProjects.delete(projectKey);
-        const config = deepMerge(DEFAULT_CONFIG, signed?.content);
+        const content = JSON.parse(Buffer.from(bytes).toString('utf-8'));
+        const config = deepMerge(DEFAULT_CONFIG, content);
         applyPriorities(config.priorities);
         return config;
     } catch (error) {

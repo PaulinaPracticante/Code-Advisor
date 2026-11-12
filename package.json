@@ -55,17 +55,12 @@
         "title": "Configurar Estándares (Gerente)"
       },
       {
-        "command": "codeadvisor.createManagerKey",
-        "title": "Crear Llave de Gerente"
+        "command": "codeadvisor.setManagerPassword",
+        "title": "Establecer contraseña del Gerente"
       }
     ],
     "menus": {
-      "commandPalette": [
-        {
-          "command": "codeadvisor.configureStandards",
-          "when": "codeadvisor.isManager"
-        }
-      ]
+
     }
   },
   "scripts": {

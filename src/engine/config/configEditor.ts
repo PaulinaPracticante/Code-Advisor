@@ -3,9 +3,24 @@
 // ----------------------------------------------------------------------------------------------------
 
 import { DEFAULT_CONFIG, Priority, RULE_PRIORITIES } from './configLoader';
-import { canonicalize } from './configSignature';
 
 const PRIORITIES: Priority[] = ['Alta', 'Media', 'Baja'];
+
+//copia el valor con las las llaves de los objetos para comparar los valores
+function sortKeys(value: unknown): unknown {
+    if (Array.isArray(value)) { return value.map(sortKeys); }
+    if (value !== null && typeof value === 'object') {
+        const source = value as Record<string, unknown>;
+        const sorted: Record<string, unknown> = {};
+        for (const key of Object.keys(source).sort()) { sorted[key] = sortKeys(source[key]); }
+        return sorted;
+    }
+    return value;
+}
+
+function canonicalize(value: unknown): string {
+    return JSON.stringify(sortKeys(value));
+}
 
 //el contenido listo para firmar, o el mensaje de por que no se puede guardar
 export type PrepareResult = { content: Record<string, unknown> } | { error: string };

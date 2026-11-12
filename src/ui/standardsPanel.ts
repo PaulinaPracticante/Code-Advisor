@@ -1,17 +1,15 @@
 // ----------------------------------------------------------------------------------------------------
-// ---- PANEL "CONFIGURAR ESTANDARES", SOLO PARA EL GERENTE (SIN LOGIN, CON FIRMA DIGITAL) -----------
+// ---- PANEL "CONFIGURAR ESTANDARES", SOLO PARA EL GERENTE -------------------------------------------
 // ----------------------------------------------------------------------------------------------------
 
 import * as vscode from 'vscode';
+import * as crypto from 'crypto';
 import { CONFIG_FILE_NAME, RULE_PRIORITIES, loadConfig } from '../engine/config/configLoader';
-import { MANAGER_PUBLIC_KEY } from '../engine/config/managerKey';
-import { buildSignedConfigText, derivePublicKey, generateManagerKeyPair } from '../engine/config/configSignature';
+import { MANAGER_PASSWORD_HASH } from '../engine/config/managerKey';
 import { prepareConfigContent } from '../engine/config/configEditor';
-import { getManagerKeyPath, readManagerPrivateKey, saveManagerKey } from '../engine/config/managerKeyStore';
 import { EXCLUDE_INFO, PARAM_LABELS, RULE_CATALOG } from '../engine/config/ruleCatalog';
+import { error } from 'console';
 
-//variable de contexto de vscode, con ella el comando "Configurar estandares" solo aparece en la paleta del equipo del gerente
-const IS_MANAGER_CONTEXT = 'codeadvisor.isManager';
 
 let currentPanel: vscode.WebviewPanel | undefined; //el panel abierto, solo puede haber uno
 
@@ -23,54 +21,47 @@ function getNonce(): string {
     return text;
 }
 
+function hashPassword(password: string): string {
+    return crypto.createHash('sha256').update(password, 'utf-8').digest('hex');
+}
 //revisa que este equipo tenga la llave del gerente y que sea la misma cuya llave publica esta dentro de la extension
-function checkManagerAccess(): { privateKey: string } | { error: string } {
-    const privateKey = readManagerPrivateKey();
-    if (privateKey === undefined) {
-        return { error: 'Solo el gerente puede configurar los estándares: este equipo no tiene la llave de gerente (' + getManagerKeyPath() + ').' };
+async function checkManagerAccess(): Promise<{ ok: true } | { error: string }> {
+    if (MANAGER_PASSWORD_HASH === '') { return { ok: true }; }
+
+    const password = await vscode.window.showInputBox({
+        prompt: 'Contraseña de gerente para configurar los estandares',
+        password: true,
+        ignoreFocusOut: true,
+    });
+    if (password === undefined) { return { error: '' }; }
+
+    if (hashPassword(password) !== MANAGER_PASSWORD_HASH) {
+        return { error: 'Contraseña incorrecta. '};
     }
-    try {
-        if (MANAGER_PUBLIC_KEY !== '' && derivePublicKey(privateKey) !== MANAGER_PUBLIC_KEY) {
-            return { error: 'La llave de gerente de este equipo no corresponde a la llave pública que trae la extensión.' };
-        }
-    } catch {
-        return { error: 'La llave de gerente de este equipo está dañada (' + getManagerKeyPath() + ').' };
-    }
-    return { privateKey };
+    return { ok: true };
 }
 
-//actualiza la variable de contexto para mostrar u ocultar el comando de configuracion
-function refreshManagerContext(): void {
-    void vscode.commands.executeCommand('setContext', IS_MANAGER_CONTEXT, !('error' in checkManagerAccess()));
-}
+async function setManagerPassword(): Promise<void> {
+    const password = await vscode.window.showInputBox({
+        prompt: 'Nueva contraseña de gerente',
+        password: true,
+        ignoreFocusOut: true,
+    });
+    if (password === undefined || password === '') { return; }
 
-//crea el par de llaves del gerente: la privada se queda en su equipo y la publica se copia para pegarla en la extension
-async function createManagerKey(): Promise<void> {
-    if (readManagerPrivateKey() !== undefined) {
-        const confirm = await vscode.window.showWarningMessage(
-            'Este equipo ya tiene una llave de gerente. Si creas otra, la actual se pierde y hay que publicar la extensión con la llave pública nueva.',
-            { modal: true },
-            'Crear otra llave'
-        );
-        if (confirm !== 'Crear otra llave') { return; }
-    }
-
-    const { privateKeyPem, publicKeyBase64 } = generateManagerKeyPair();
-    saveManagerKey(privateKeyPem, publicKeyBase64);
-    refreshManagerContext();
-
+    const hash = hashPassword(password); 
     const copy = await vscode.window.showInformationMessage(
-        'Llave de gerente creada en ' + getManagerKeyPath() + '. Pega la llave pública en src/engine/config/managerKey.ts y publica la extensión para que los demás equipos validen la configuración. Guarda una copia segura de la llave privada.',
-        'Copiar llave pública'
+        'Pega este hash en MANAGER_PASSWORD_HASH (src/engine/config/managerKey.ts) y publica la extensión para que el panel pida esta contraseña.',
+        'Copiar hash'
     );
-    if (copy === 'Copiar llave pública') { await vscode.env.clipboard.writeText(publicKeyBase64); }
+    if (copy === 'Copiar hash') { await vscode.env.clipboard.writeText(hash); }
 }
 
 //firma y guarda en el proyecto lo que el gerente capturo en el panel
 async function saveStandards(panel: vscode.WebviewPanel, folder: vscode.WorkspaceFolder, message: { exclude: unknown; priorities: unknown; rules: unknown }): Promise<void> {
-    const access = checkManagerAccess(); //se vuelve a revisar, la llave pudo cambiar con el panel abierto
+    const access = await checkManagerAccess(); //se vuelve a revisar, la llave pudo cambiar con el panel abierto
     if ('error' in access) {
-        void panel.webview.postMessage({ command: 'error', message: access.error });
+        if (access.error !== '') {void panel.webview.postMessage({ command: 'error', message: access.error }); }
         return;
     }
 
@@ -80,17 +71,22 @@ async function saveStandards(panel: vscode.WebviewPanel, folder: vscode.Workspac
         return;
     }
 
-    const text = buildSignedConfigText(prepared.content, access.privateKey);
-    await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder.uri, CONFIG_FILE_NAME), Buffer.from(text, 'utf8'));
+    const text = JSON.stringify(prepared.content, null, 2) + '\n';
+    try {
+        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder.uri, CONFIG_FILE_NAME), Buffer.from(text, 'utf8'));
+    } catch (error) { 
+        void panel.webview.postMessage({ command: 'error', message: 'No se pudo guardar ' + CONFIG_FILE_NAME + ': ' + (error as Error).message});
+        return;
+    }
     void panel.webview.postMessage({ command: 'saved' });
     void vscode.window.showInformationMessage('Configuración firmada y guardada en ' + CONFIG_FILE_NAME + '. Haz commit para compartirla con el equipo.');
 }
 
 //abre el panel con la configuracion vigente del proyecto, solo si este equipo tiene la llave del gerente
 async function openStandardsPanel(): Promise<void> {
-    const access = checkManagerAccess();
+    const access = await checkManagerAccess();
     if ('error' in access) {
-        void vscode.window.showErrorMessage(access.error);
+        if (access.error !== '') { void vscode.window.showErrorMessage(access.error); }
         return;
     }
 
@@ -122,7 +118,7 @@ async function openStandardsPanel(): Promise<void> {
             void panel.webview.postMessage({
                 command: 'load',
                 project: folder.name,
-                protectedMode: MANAGER_PUBLIC_KEY !== '',
+                protectedMode: MANAGER_PASSWORD_HASH !== '',
                 exclude: config.exclude,
                 rules: config.rules,
                 priorities: { ...RULE_PRIORITIES, ...config.priorities },
@@ -138,9 +134,8 @@ async function openStandardsPanel(): Promise<void> {
 
 //registra los comandos del gerente
 export function registerStandardsCommands(context: vscode.ExtensionContext): void {
-    refreshManagerContext();
     context.subscriptions.push(
-        vscode.commands.registerCommand('codeadvisor.createManagerKey', () => createManagerKey()),
+        vscode.commands.registerCommand('codeadvisor.setManagerPassword', () => setManagerPassword()),
         vscode.commands.registerCommand('codeadvisor.configureStandards', () => openStandardsPanel())
     );
 }
@@ -316,9 +311,9 @@ function getHtml(webview: vscode.Webview): string {
                         root.textContent = '';
                         root.appendChild(el('h2', { text: 'Estándares de ' + data.project }));
                         if (!data.protectedMode) {
-                            root.appendChild(el('div', { className: 'banner', text: 'La extensión todavía no trae la llave pública del gerente, por eso la configuración aún no está protegida. Usa el comando "Crear Llave de Gerente".' }));
+                            root.appendChild(el('div', { className: 'banner', text: 'La extensión todavía no trae la contraseña del gerente, por eso la configuración aún no está protegida. Usa el comando "Establecer contraeña del Gerente".' }));
                         }
-                        root.appendChild(el('p', { className: 'hint', text: 'Al guardar, la configuración se firma con la llave del gerente. Si alguien edita el archivo a mano, la extensión lo ignora y usa la configuración por defecto.' }));
+                        root.appendChild(el('p', { className: 'hint', text: 'Al guardar se escribe directo en el archivo.Protege que no se abra en el panel sin la contraseña.' }));
 
                         const search = el('input', { type: 'search', placeholder: 'Buscar una regla por nombre o descripción...', value: state.query });
                         search.setAttribute('aria-label', 'Buscar regla');
@@ -329,7 +324,7 @@ function getHtml(webview: vscode.Webview): string {
                         root.appendChild(groupsBox);
 
                         statusBox = el('span', { className: 'status' });
-                        const saveButton = el('button', { className: 'primary', text: 'Firmar y guardar' });
+                        const saveButton = el('button', { className: 'primary', text: 'Guardar' });
                         saveButton.addEventListener('click', save);
                         const discardButton = el('button', { className: 'secondary', text: 'Descartar cambios' });
                         discardButton.addEventListener('click', () => { resetState(); render(); setStatus('Cambios descartados.', false); });
@@ -515,7 +510,7 @@ function getHtml(webview: vscode.Webview): string {
                     //lo guardado pasa a ser la base a la que regresa "Descartar cambios"
                     function onSaved() {
                         if (lastSent) { data.rules = lastSent.rules; data.priorities = lastSent.priorities; data.exclude = lastSent.exclude; }
-                        setStatus('Configuración firmada y guardada. Haz commit para compartirla con el equipo.', false);
+                        setStatus('Configuración guardada. Haz commit para compartirla con el equipo.', false);
                     }
 
                     //avisa a la extension que la pagina ya esta escuchando para que le mande la configuracion
