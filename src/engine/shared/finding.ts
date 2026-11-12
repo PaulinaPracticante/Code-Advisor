@@ -1,4 +1,4 @@
-import { RULE_PRIORITIES } from '../config/configLoader';
+import { getRulePriority } from '../config/configLoader';
 
 export type Severity = 'Alta' | 'Media' | 'Baja';
 
@@ -23,7 +23,7 @@ export function pushFinding(
         file,
         line: options?.line,
         rule,
-        severity: RULE_PRIORITIES[rule] ?? 'Media',
+        severity: getRulePriority(rule) ?? 'Media',
         message,
         suggestion: options?.suggestion,
     });

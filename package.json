@@ -49,8 +49,24 @@
       {
         "command": "codeadvisor.codeReviewer",
         "title": "Revisar Código"
+      },
+      {
+        "command": "codeadvisor.configureStandards",
+        "title": "Configurar Estándares (Gerente)"
+      },
+      {
+        "command": "codeadvisor.createManagerKey",
+        "title": "Crear Llave de Gerente"
       }
-    ]
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "codeadvisor.configureStandards",
+          "when": "codeadvisor.isManager"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",

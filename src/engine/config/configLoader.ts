@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { Minimatch } from 'minimatch';
 import type { NamingCaseStyles } from './namingConfig';
+import { MANAGER_PUBLIC_KEY } from './managerKey';
+import { splitSignedConfig, verifyConfig } from './configSignature';
 
 export interface RuleToggle {
     enabled: boolean;
@@ -139,6 +141,7 @@ export interface SolidFrontendAiConfig extends RuleToggle {
 // reglas que todavia no tienen parametros propios configurables, solo enabled/disabled
 export interface CodeAdvisorConfig {
     exclude: string[];
+    priorities?: Record<string, Priority>; //prioridades que el gerente cambio respecto a las de RULE_PRIORITIES
     rules: {
         dtoAutoMapper: DtoAutoMapperConfig;
         parameters: ParametersConfig;
@@ -177,7 +180,7 @@ export interface CodeAdvisorConfig {
     };
 }
 
-const CONFIG_FILE_NAME = 'code-advisor.config.json';
+export const CONFIG_FILE_NAME = 'code-advisor.config.json';
 
 //valores por defecto: son exactamente los que estan hardcodeados en cada analizador, para que un 
 //workspace sin code-advisor.config.json se comporte igual que antes.
@@ -292,13 +295,43 @@ function deepMerge<T>(base: T, override: unknown): T {
     return result as T;
 }
 
+//proyectos a los que ya se les aviso que su configuracion no es valida, para no repetir el aviso cada vez que se guarda un archivo
+const warnedProjects = new Set<string>();
+
+//aplica las prioridades que cambio el gerente sobre las de por defecto, ignora lo que no sea Alta, Media o Baja
+function applyPriorities(overrides: unknown): void {
+    activePriorities = { ...RULE_PRIORITIES };
+    if (overrides === null || typeof overrides !== 'object') { return; }
+    for (const [rule, priority] of Object.entries(overrides as Record<string, unknown>)) {
+        if (priority === 'Alta' || priority === 'Media' || priority === 'Baja') { activePriorities[rule] = priority; }
+    }
+}
+
 export async function loadConfig(workspaceRoot: vscode.Uri): Promise<CodeAdvisorConfig> {
     const configUri = vscode.Uri.joinPath(workspaceRoot, CONFIG_FILE_NAME);
+    const projectKey = workspaceRoot.toString();
     try {
         const bytes = await vscode.workspace.fs.readFile(configUri);
-        const userConfig = JSON.parse(Buffer.from(bytes).toString('utf8'));
-        return deepMerge(DEFAULT_CONFIG, userConfig);
+        const signed = splitSignedConfig(JSON.parse(Buffer.from(bytes).toString('utf8')));
+
+        //con la llave publica del gerente dentro de la extension, solo se acepta la configuracion que el gerente firmo
+        if (MANAGER_PUBLIC_KEY !== '' && !(signed && verifyConfig(signed.content, signed.signature, MANAGER_PUBLIC_KEY))) {
+            if (!warnedProjects.has(projectKey)) {
+                warnedProjects.add(projectKey);
+                vscode.window.showWarningMessage(
+                    `Code Advisor: "${CONFIG_FILE_NAME}" no esta firmado por el gerente o fue modificado; se uso la configuracion por defecto.`
+                );
+            }
+            applyPriorities(undefined);
+            return DEFAULT_CONFIG;
+        }
+
+        warnedProjects.delete(projectKey);
+        const config = deepMerge(DEFAULT_CONFIG, signed?.content);
+        applyPriorities(config.priorities);
+        return config;
     } catch (error) {
+        applyPriorities(undefined);
         if ((error as vscode.FileSystemError).code !== 'FileNotFound') {
             vscode.window.showWarningMessage(
                 `Code Advisor: no se pude leer "${CONFIG_FILE_NAME}" (${(error as Error).message}); se uso la configuracion por defecto.`
@@ -358,4 +391,12 @@ export const RULE_PRIORITIES: Record<string, Priority> = {
     tableAlias: 'Baja',
     indentation: 'Baja',
     commentLanguage: 'Baja',
+}
+
+//prioridades vigentes: las de RULE_PRIORITIES con los cambios del gerente encima, se recalculan en cada loadConfig
+let activePriorities: Record<string, Priority> = RULE_PRIORITIES;
+
+//prioridad con la que se reporta un hallazgo de la regla, undefined si la regla no tiene una asignada
+export function getRulePriority(rule: string): Priority | undefined {
+    return activePriorities[rule];
 }
