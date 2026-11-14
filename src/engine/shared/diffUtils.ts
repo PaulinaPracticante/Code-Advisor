@@ -1,15 +1,16 @@
 import { execFileSync } from 'child_process';
 
 // devuelve el conjunto de numeros de linea (1-indezados) agregados/modificados en "filePath"
-// entre la rama base y HEAD, leyendo los encabezados de hunk de un diff son contexto
-export function getChangedLineNumbers(workspaceRoot: string, baseBranch: string, filePath: string): Set<number> {
+// entre "baseRef" y HEAD, leyendo los encabezados de hunk de un diff son contexto.
+// baseRef puede ser la rama base completa ("origin/main") o un commit puntual (ver resolveAnalysisBaseRef)
+export function getChangedLineNumbers(workspaceRoot: string, baseRef: string, filePath: string): Set<number> {
     const changedLines = new Set<number>();
     let output: string;
 
     try {
         output = execFileSync(
             'git',
-            ['diff', '--unified=0', '--diff-filter=ACMR', `origin/${baseBranch}...HEAD`, '--', filePath],
+            ['diff', '--unified=0', '--diff-filter=ACMR', `${baseRef}...HEAD`, '--', filePath],
             { cwd: workspaceRoot, encoding: 'utf8' }
         );
     } catch (error) {
@@ -68,4 +69,17 @@ export function rangeIntersectChangedLines(changedLines: Set<number>, startLine:
         if (changedLines.has(line)) { return true;}
     }
     return false;
+}
+
+export function resolveAnalysisBaseRef(workspaceRoot: string, baseBranch: string, lastAnalyzedCommit?: string): string {
+    execFileSync('git', ['fetch', 'origin', baseBranch], { cwd: workspaceRoot, encoding: 'utf8' });
+    const baseBranchRef = `origin/${baseBranch}`;
+    if (!lastAnalyzedCommit) { return baseBranchRef; }
+
+    try {
+        execFileSync('git', ['merge-base', '--is-ancestor', lastAnalyzedCommit, 'HEAD'], { cwd: workspaceRoot, encoding: 'utf8' });
+        return lastAnalyzedCommit;
+    } catch {
+        return baseBranchRef;
+    }
 }

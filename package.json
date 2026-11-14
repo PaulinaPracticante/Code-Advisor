@@ -52,7 +52,8 @@
       },
       {
         "command": "codeadvisor.configureStandards",
-        "title": "Configurar Estándares (Gerente)"
+        "title": "Configurar Estándares (Gerente)",
+        "icon": "$(gear)"
       },
       {
         "command": "codeadvisor.setManagerPassword",
@@ -60,7 +61,13 @@
       }
     ],
     "menus": {
-
+      "view/title": [
+        {
+          "command": "codeadvisor.configureStandards",
+          "when": "view == codeadvisor.findingsView",
+          "group": "navigation"
+        }
+      ]
     }
   },
   "scripts": {

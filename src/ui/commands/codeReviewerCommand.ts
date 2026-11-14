@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { execFileSync } from 'child_process';
 import { loadConfig, buildExcludeMatchers, isExluded, CodeAdvisorConfig } from '../../engine/config/configLoader';
-import { getChangedLineNumbers, getCommitSubjects } from '../../engine/shared/diffUtils';
+import { getChangedLineNumbers, getCommitSubjects, resolveAnalysisBaseRef } from '../../engine/shared/diffUtils';
 import { EXTENSION_TO_LANGUAGE_ID, getNamingCaseStyles } from '../../engine/config/namingConfig';
 import { analyzeNaming } from '../../engine/analyzers/style/namingAnalyzer';
 import { analyzeIndentation } from '../../engine/analyzers/style/indentationAnalyzer';
@@ -36,19 +36,18 @@ import { AiCommentTask, AiFunctionTask, MIN_FUNCTION_LINES, runCombinedAiReview 
 import { analyzeSolidFrontendIsp } from '../../engine/analyzers/structure/solidFrontendAnalyzer';
 import { collectSolidFrontendTask, runSolidFrontendReview, SolidFrontendTask } from '../../engine/analyzers/ai/solidFrontendAnalyzer';
 import { loadProjectGuidelines } from '../../engine/shared/projectGuidelines';
-import { Finding } from '../../engine/shared/finding';
+import { Finding, mergeFindings } from '../../engine/shared/finding';
 import { publishDiagnostics } from '../diagnostics';
 import { updateDecorations } from '../decorations';
 import { FindingsPanel } from '../findingsPanel';
 
-function getChangedFile(workspaceRoot: string, baseBranch: string): string[] { 
+// baseRef ya viene resuelto (ver resolveAnalysisBaseRef): puede ser la rama base completa
+// o, si ya se habia analizado un commit antes en esta rama, solo ese commit (diff incremental)
+function getChangedFile(workspaceRoot: string, baseRef: string): string[] {
 	try {
-
-		execFileSync('git', ['fetch', 'origin', baseBranch], { cwd: workspaceRoot, encoding: 'utf8' });
-		
 		const output = execFileSync(
 			'git',
-			['diff', '--name-only', '--diff-filter=ACMR', `origin/${baseBranch}...HEAD`],
+			['diff', '--name-only', '--diff-filter=ACMR', `${baseRef}...HEAD`],
 			{ cwd: workspaceRoot, encoding: 'utf8' }
 		);
 
@@ -58,12 +57,16 @@ function getChangedFile(workspaceRoot: string, baseBranch: string): string[] {
 			.filter(line => line.length > 0);
 
 	} catch (error) {
-		throw new Error(`No se pudo obtener el diff contra la rama "origin/${baseBranch}": ${(error as Error).message}`);
+		throw new Error(`No se pudo obtener el diff contra "${baseRef}": ${(error as Error).message}`);
 	}
 }
 
 function getCurrentCommit(workspaceRoot: string): string {
 	return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workspaceRoot, encoding: 'utf8' }).trim();
+}
+
+function getCurrentBranch(workspaceRoot: string): string {
+	return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspaceRoot, encoding: 'utf8' }).trim();
 }
 
 // corre sobre un solo archivo todas las reglas estaticas (sin IA, sin analizadores de todo el proyecto);
@@ -160,10 +163,13 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		}
 
 		const commit = getCurrentCommit(folder.uri.fsPath);
-		const cachedFindings = findingsPanel.getCachedFindings(folder, commit);
-		if (cachedFindings) {
-			publishDiagnostics(diagnosticCollection, folder, cachedFindings);
-			updateDecorations(cachedFindings);
+		const branch = getCurrentBranch(folder.uri.fsPath);
+		const accumulated  = findingsPanel.getAccumulated(folder, branch);
+		const lastAnalyzedCommit = findingsPanel.getLastAnalyzedCommit(folder, branch);
+
+		if (lastAnalyzedCommit === commit) {
+			publishDiagnostics(diagnosticCollection, folder, accumulated);
+			updateDecorations(accumulated);
 			vscode.window.showInformationMessage(
 				'CodeAdvisor: este commit ya fue analizado, se muestran los hallazgos guardados'
 			);
@@ -181,7 +187,16 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		const excludePattern = `{${config.exclude.join(',')}}`;
 
 		const baseBranch = vscode.workspace.getConfiguration('codeadvisor').get<string>('baseBranch', 'main');
-		const changedPaths = getChangedFile(folder.uri.fsPath, baseBranch);
+		const baseRef =  resolveAnalysisBaseRef(folder.uri.fsPath, baseBranch, lastAnalyzedCommit);
+		const changedPaths = getChangedFile(folder.uri.fsPath, baseRef);
+
+		const flaggedLinesByFile = new Map<string, Set<number>>();
+		for (const f of accumulated) {
+			if (f.line === undefined) { continue; }
+			const set = flaggedLinesByFile.get(f.file) ?? new Set<number>();
+			set.add(f.line);
+			flaggedLinesByFile.set(f.file, set);
+		}
 
 		const codeFiles = changedPaths
 			.filter(path => /\.(ts|tsx|js|jsx|php|cs)$/.test(path))
@@ -217,7 +232,11 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 			const fileLabel = vscode.workspace.asRelativePath(uri); // Ruta relativa del archivo, para identificarlo en el reporte
 			const bytes = await vscode.workspace.fs.readFile(uri); // Se lee el contenido del archivo
 			const lines = Buffer.from(bytes).toString('utf8').split('\n'); // Se divide el texto del documento en lineas
-			const changedLines = getChangedLineNumbers(folder.uri.fsPath, baseBranch, fileLabel);
+			const rawChangedLines = getChangedLineNumbers(folder.uri.fsPath, baseRef, fileLabel);
+			const flagged = flaggedLinesByFile.get(fileLabel);
+			const changedLines = flagged
+				? new Set([...rawChangedLines].filter(line => !flagged.has(line)))
+				: rawChangedLines;
 			fileLines.set(fileLabel, lines);
 			changedLinesByFile.set(fileLabel, changedLines);
 
@@ -380,10 +399,14 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 				.map(p => `=== Prioridad ${p.toUpperCase()} (${groups[p].length}) ===\n${groups[p].map(formatFinding).join('\n')}`)
 				.join('\n\n');
 		}
-		publishDiagnostics(diagnosticCollection, folder, findings);
-		updateDecorations(findings);
-		findingsPanel.update(folder, findings, commit);
-		const reportContent = findings.length > 0 ? groupByPriority(findings) : 'No se encontraron hallazgos.';
+
+		const allFindings = mergeFindings(accumulated, findings);
+
+		publishDiagnostics(diagnosticCollection, folder, allFindings);
+		updateDecorations(allFindings);
+		findingsPanel.update(folder, allFindings, branch, commit);
+
+		const reportContent = allFindings.length > 0 ? groupByPriority(allFindings) : 'No se encontraron hallazgos.';
 		const reportUri = vscode.Uri.joinPath(folder.uri, 'code-advisor-report.txt');
 		await vscode.workspace.fs.writeFile(reportUri, Buffer.from(reportContent, 'utf8'));
 

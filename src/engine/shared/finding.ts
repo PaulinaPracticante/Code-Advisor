@@ -11,6 +11,25 @@ export interface Finding {
     suggestion?: string; //recomendacion de la solucion 
 }
 
+function findingKey(finding: Finding): string {
+    if (finding.line !== undefined) {
+        return `${finding.file}|${finding.line}|${finding.rule}`;
+    }
+    return `${finding.file}|${finding.rule}|${finding.message}`;
+}
+
+export function mergeFindings(accumulated: Finding[], current: Finding[]): Finding[] {
+    const merged = [...accumulated];
+    const seen = new Set(accumulated.map(findingKey));
+
+    for(const finding of current) {
+        const key = findingKey(finding);
+        if (seen.has(key)) { continue; }
+        seen.add(key);
+        merged.push(finding);
+    }
+    return merged;
+}
 
 export function pushFinding(
     findings: Finding[],

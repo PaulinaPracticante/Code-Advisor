@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { Minimatch } from 'minimatch';
 import type { NamingCaseStyles } from './namingConfig';
+import { GLOBAL_STANDARS } from './globalStandards';
 
 
 export interface RuleToggle {
@@ -179,8 +180,6 @@ export interface CodeAdvisorConfig {
     };
 }
 
-export const CONFIG_FILE_NAME = 'code-advisor.config.json';
-
 //valores por defecto: son exactamente los que estan hardcodeados en cada analizador, para que un 
 //workspace sin code-advisor.config.json se comporte igual que antes.
 export const DEFAULT_CONFIG: CodeAdvisorConfig = {
@@ -304,23 +303,10 @@ function applyPriorities(overrides: unknown): void {
     }
 }
 
-export async function loadConfig(workspaceRoot: vscode.Uri): Promise<CodeAdvisorConfig> {
-    const configUri = vscode.Uri.joinPath(workspaceRoot, CONFIG_FILE_NAME);
-    try {
-        const bytes = await vscode.workspace.fs.readFile(configUri);
-        const content = JSON.parse(Buffer.from(bytes).toString('utf-8'));
-        const config = deepMerge(DEFAULT_CONFIG, content);
-        applyPriorities(config.priorities);
-        return config;
-    } catch (error) {
-        applyPriorities(undefined);
-        if ((error as vscode.FileSystemError).code !== 'FileNotFound') {
-            vscode.window.showWarningMessage(
-                `Code Advisor: no se pude leer "${CONFIG_FILE_NAME}" (${(error as Error).message}); se uso la configuracion por defecto.`
-            );
-        }
-        return DEFAULT_CONFIG;
-    }
+export async function loadConfig(_workspaceRoot?: vscode.Uri): Promise<CodeAdvisorConfig> {
+    const config = deepMerge(DEFAULT_CONFIG, GLOBAL_STANDARS);
+    applyPriorities(config.priorities);
+    return config;
 }
 
 //precompila los minimatch una vez por config(se llama por cada archivo)

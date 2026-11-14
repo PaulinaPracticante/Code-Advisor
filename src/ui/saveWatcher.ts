@@ -41,7 +41,7 @@ export function registerSaveWatcher(
             const baseBranch = vscode.workspace.getConfiguration('codeadvisor').get<string>('baseBranch', 'main');
 
             const lines = document.getText().split('\n');
-            const changedLines = getChangedLineNumbers(folder.uri.fsPath, baseBranch, fileLabel);
+            const changedLines = getChangedLineNumbers(folder.uri.fsPath, `origin/${baseBranch}`, fileLabel);
 
             const freshForFile: Finding[] = [];
             analyzeFileStatic(lines, fileLabel, folder.name, changedLines, config, projectMeta, freshForFile);
@@ -51,7 +51,7 @@ export function registerSaveWatcher(
                 ...freshForFile,
             ];
 
-            findingsPanel.update(folder, merged, current.commit ?? '');
+            findingsPanel.update(folder, merged, current.branch ?? '', current.commit ?? '');
             publishDiagnostics(diagnosticCollection, folder, merged);
             updateDecorations(merged);
         })

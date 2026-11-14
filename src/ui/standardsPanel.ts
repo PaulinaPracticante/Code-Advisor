@@ -4,11 +4,10 @@
 
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
-import { CONFIG_FILE_NAME, RULE_PRIORITIES, loadConfig } from '../engine/config/configLoader';
+import { RULE_PRIORITIES, loadConfig } from '../engine/config/configLoader';
 import { MANAGER_PASSWORD_HASH } from '../engine/config/managerKey';
 import { prepareConfigContent } from '../engine/config/configEditor';
 import { EXCLUDE_INFO, PARAM_LABELS, RULE_CATALOG } from '../engine/config/ruleCatalog';
-import { error } from 'console';
 
 
 let currentPanel: vscode.WebviewPanel | undefined; //el panel abierto, solo puede haber uno
@@ -58,7 +57,7 @@ async function setManagerPassword(): Promise<void> {
 }
 
 //firma y guarda en el proyecto lo que el gerente capturo en el panel
-async function saveStandards(panel: vscode.WebviewPanel, folder: vscode.WorkspaceFolder, message: { exclude: unknown; priorities: unknown; rules: unknown }): Promise<void> {
+async function saveStandards(panel: vscode.WebviewPanel, message: { exclude: unknown; priorities: unknown; rules: unknown }): Promise<void> {
     const access = await checkManagerAccess(); //se vuelve a revisar, la llave pudo cambiar con el panel abierto
     if ('error' in access) {
         if (access.error !== '') {void panel.webview.postMessage({ command: 'error', message: access.error }); }
@@ -71,15 +70,10 @@ async function saveStandards(panel: vscode.WebviewPanel, folder: vscode.Workspac
         return;
     }
 
-    const text = JSON.stringify(prepared.content, null, 2) + '\n';
-    try {
-        await vscode.workspace.fs.writeFile(vscode.Uri.joinPath(folder.uri, CONFIG_FILE_NAME), Buffer.from(text, 'utf8'));
-    } catch (error) { 
-        void panel.webview.postMessage({ command: 'error', message: 'No se pudo guardar ' + CONFIG_FILE_NAME + ': ' + (error as Error).message});
-        return;
-    }
+    const text = 'export const GLOBAL_STANDARS: Record<string, unknown> = ' + JSON.stringify(prepared.content, null, 4) + ';\n';
+    await vscode.env.clipboard.writeText(text);
     void panel.webview.postMessage({ command: 'saved' });
-    void vscode.window.showInformationMessage('Configuración firmada y guardada en ' + CONFIG_FILE_NAME + '. Haz commit para compartirla con el equipo.');
+    void vscode.window.showInformationMessage('Se copió al portapapeles. Pégalo en GLOBAL_STANDARDS (src/engine/config/globalStandards.ts) y publica la extensión para que aplique en todos los repos del equipo.');
 }
 
 //abre el panel con la configuracion vigente del proyecto, solo si este equipo tiene la llave del gerente
@@ -90,19 +84,13 @@ async function openStandardsPanel(): Promise<void> {
         return;
     }
 
-    const folder = vscode.workspace.workspaceFolders?.[0];
-    if (!folder) {
-        void vscode.window.showErrorMessage('Abra la carpeta del proyecto cuyos estándares quiere configurar');
-        return;
-    }
-
     if (currentPanel) {
         currentPanel.reveal();
         return;
     }
 
     //la configuracion vigente, si el archivo no tiene una firma valida se parte de la de por defecto
-    const config = await loadConfig(folder.uri);
+    const config = await loadConfig();
 
     const panel = vscode.window.createWebviewPanel('codeadvisor.standards', 'Configurar estándares', vscode.ViewColumn.One, {
         enableScripts: true,
@@ -117,7 +105,6 @@ async function openStandardsPanel(): Promise<void> {
         if (message.command === 'ready') {
             void panel.webview.postMessage({
                 command: 'load',
-                project: folder.name,
                 protectedMode: MANAGER_PASSWORD_HASH !== '',
                 exclude: config.exclude,
                 rules: config.rules,
@@ -127,7 +114,7 @@ async function openStandardsPanel(): Promise<void> {
             });
         }
         if (message.command === 'save') {
-            await saveStandards(panel, folder, message);
+            await saveStandards(panel, message);
         }
     });
 }
@@ -309,7 +296,7 @@ function getHtml(webview: vscode.Webview): string {
 
                     function render() {
                         root.textContent = '';
-                        root.appendChild(el('h2', { text: 'Estándares de ' + data.project }));
+                        root.appendChild(el('h2', { text: 'Estándares del equipo' }));
                         if (!data.protectedMode) {
                             root.appendChild(el('div', { className: 'banner', text: 'La extensión todavía no trae la contraseña del gerente, por eso la configuración aún no está protegida. Usa el comando "Establecer contraeña del Gerente".' }));
                         }
@@ -510,7 +497,7 @@ function getHtml(webview: vscode.Webview): string {
                     //lo guardado pasa a ser la base a la que regresa "Descartar cambios"
                     function onSaved() {
                         if (lastSent) { data.rules = lastSent.rules; data.priorities = lastSent.priorities; data.exclude = lastSent.exclude; }
-                        setStatus('Configuración guardada. Haz commit para compartirla con el equipo.', false);
+                        setStatus('Copiado al portapapeles. Pégalo en globalStandards.ts y publica la extensión.', false);
                     }
 
                     //avisa a la extension que la pagina ya esta escuchando para que le mande la configuracion
