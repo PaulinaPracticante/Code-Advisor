@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { Minimatch } from 'minimatch';
 import type { NamingCaseStyles } from './namingConfig';
 import { GLOBAL_STANDARS } from './globalStandards';
+import { fetchStandards } from './standardsClient';
 
 
 export interface RuleToggle {
@@ -304,7 +305,8 @@ function applyPriorities(overrides: unknown): void {
 }
 
 export async function loadConfig(_workspaceRoot?: vscode.Uri): Promise<CodeAdvisorConfig> {
-    const config = deepMerge(DEFAULT_CONFIG, GLOBAL_STANDARS);
+    const remote = await fetchStandards();
+    const config = deepMerge(DEFAULT_CONFIG, remote ?? GLOBAL_STANDARS); //GLOBAL_STANDARS es el respaldo si la API no responde
     applyPriorities(config.priorities);
     return config;
 }

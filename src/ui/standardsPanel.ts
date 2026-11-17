@@ -8,6 +8,7 @@ import { RULE_PRIORITIES, loadConfig } from '../engine/config/configLoader';
 import { MANAGER_PASSWORD_HASH } from '../engine/config/managerKey';
 import { prepareConfigContent } from '../engine/config/configEditor';
 import { EXCLUDE_INFO, PARAM_LABELS, RULE_CATALOG } from '../engine/config/ruleCatalog';
+import { pushStandards } from '../engine/config/standardsClient';
 import { getHistory } from '../engine/history/historyClient';
 
 
@@ -71,10 +72,14 @@ async function saveStandards(panel: vscode.WebviewPanel, message: { exclude: unk
         return;
     }
 
-    const text = 'export const GLOBAL_STANDARS: Record<string, unknown> = ' + JSON.stringify(prepared.content, null, 4) + ';\n';
-    await vscode.env.clipboard.writeText(text);
-    void panel.webview.postMessage({ command: 'saved' });
-    void vscode.window.showInformationMessage('Se copió al portapapeles. Pégalo en GLOBAL_STANDARDS (src/engine/config/globalStandards.ts) y publica la extensión para que aplique en todos los repos del equipo.');
+    try {
+        await pushStandards(prepared.content);
+        void panel.webview.postMessage({ command: 'saved' });
+        void vscode.window.showInformationMessage('Estándares guardados: ya aplican para todo el equipo.');
+    } catch (error) {
+        const text = 'No se pudo guardar: ' + (error instanceof Error ? error.message : String(error));
+        void panel.webview.postMessage({ command: 'error', message: text });
+    }
 }
 
 function asNumber(value: unknown): number | undefined {
@@ -605,7 +610,7 @@ function getHtml(webview: vscode.Webview): string {
                     //lo guardado pasa a ser la base a la que regresa "Descartar cambios"
                     function onSaved() {
                         if (lastSent) { data.rules = lastSent.rules; data.priorities = lastSent.priorities; data.exclude = lastSent.exclude; }
-                        setStatus('Copiado al portapapeles. Pégalo en globalStandards.ts y publica la extensión.', false);
+                        setStatus('Guardado. Ya aplica para todo el equipo.', false);
                     }
 
                     // ------------------------------------------------------------------ pestañas: Estandares e Historial

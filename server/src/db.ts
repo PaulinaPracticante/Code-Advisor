@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { DbConfig } from './config';
 
-const SCHEMA_FILE = path.join(__dirname, '..', 'sql', '001_create_history.sql');
+const SCHEMA_DIR = path.join(__dirname, '..', 'sql');
 
 //las fechas se guardan y se leen en UTC para que no dependan de la zona horaria del servidor
 export function createPool(config: DbConfig): Pool {
@@ -36,7 +36,10 @@ export async function initDatabase(config: DbConfig): Promise<void> {
 			`CREATE DATABASE IF NOT EXISTS \`${config.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci`
 		);
 		await connection.query(`USE \`${config.database}\``);
-		await connection.query(fs.readFileSync(SCHEMA_FILE, 'utf8'));
+		const files = fs.readdirSync(SCHEMA_DIR).filter(name => name.endsWith('.sql')).sort();
+		for (const file of files) { 
+			await connection.query(fs.readFileSync(path.join(SCHEMA_DIR, file), 'utf8'));
+		}
 	} finally {
 		await connection.end();
 	}

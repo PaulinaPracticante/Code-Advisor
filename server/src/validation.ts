@@ -6,6 +6,7 @@ import { HttpError } from './errors';
 import { AnalysisInput, FindingInput, MergeInput, RepoInput, SEVERITIES, Severity } from './types';
 
 const MAX_FINDINGS = 5000;
+const MAX_STANDARS_BYTES = 200_000;
 
 function badRequest(message: string): never {
 	throw new HttpError(400, message);
@@ -131,4 +132,15 @@ export function readInt(value: unknown, fallback: number, min: number, max: numb
 	const parsed = typeof value === 'string' ? Number.parseInt(value, 10) : Number.NaN;
 	if (Number.isNaN(parsed)) { return fallback; }
 	return Math.min(Math.max(parsed, min), max);
+}
+
+//valida lo que manda el panel al guardar
+export function parseStandardsContent(body: unknown): Record<string, unknown> {
+	if (!isObject(body) || !isObject(body.content)) {
+		return badRequest('content es obligatorio y debe ser un objeto');
+	}
+	if (JSON.stringify(body.content).length > MAX_STANDARS_BYTES) {
+		return badRequest('content es demasiado grande');
+	}
+	return body.content as Record<string, unknown>;
 }

@@ -7,7 +7,8 @@ import { Pool } from 'mysql2/promise';
 import { HttpError } from './errors';
 import { closePullRequest, saveAnalysis } from './historyService';
 import { CycleState, getSummary, listAnalysisFindings, listCycleCommits, listCycles, listRepos } from './queryService';
-import { parseAnalysis, parseMerge, readInt } from './validation';
+import { getCurrentStandards, listStandardsHistory, saveStandards } from './standardsService';
+import { parseAnalysis, parseMerge, parseStandardsContent, readInt } from './validation';
 
 type Handler = (request: Request, response: Response) => Promise<void>;
 
@@ -75,6 +76,24 @@ export function createRouter(pool: Pool): Router {
 
 	router.get('/history/analyses/:id/findings', wrap(async (request, response) => {
 		response.json(await listAnalysisFindings(pool, readRequiredInt(request.params.id, 'id')));
+	}));
+
+	//la extension consulta los estandares vigentes al cargar la configuracion
+	router.get('/standards', wrap(async (_request, response) => {
+		const current = await getCurrentStandards(pool);
+		response.json({ content: current?.content ?? {}, updatedAt: current?.createdAt ?? null });
+	}));
+
+	//el panel del gerente guarda una version nueva, nunca pisa las anteriores
+	router.post('/standards', wrap(async (request, response) => {
+		const content = parseStandardsContent(request.body);
+		const version = await saveStandards(pool, content);
+		response.status(201).json({ id: version.id, createdAt: version.createdAt });
+	}));
+
+	//versiones anteriores, de la mas nueva a la mas vieja
+	router.get('/standards/history', wrap(async (request, response) => {
+		response.json(await listStandardsHistory(pool, readInt(request.query.limit, 20, 1, 100)));
 	}));
 
 	return router;
