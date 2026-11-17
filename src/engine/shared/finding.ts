@@ -11,11 +11,10 @@ export interface Finding {
     suggestion?: string; //recomendacion de la solucion 
 }
 
+//dos hallazgos son el mismo si coinciden en archivo, linea, regla y mensaje; sin el mensaje se perdian hallazgos distintos
+//de la misma regla en la misma linea (ej. una transaccion sin commit y sin rollback, o dos alias malos en una consulta)
 function findingKey(finding: Finding): string {
-    if (finding.line !== undefined) {
-        return `${finding.file}|${finding.line}|${finding.rule}`;
-    }
-    return `${finding.file}|${finding.rule}|${finding.message}`;
+    return `${finding.file}|${finding.line ?? ''}|${finding.rule}|${finding.message}`;
 }
 
 export function mergeFindings(accumulated: Finding[], current: Finding[]): Finding[] {

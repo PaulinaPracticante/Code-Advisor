@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { execFileSync } from 'child_process';
 import { loadConfig, buildExcludeMatchers, isExluded, CodeAdvisorConfig } from '../../engine/config/configLoader';
-import { getChangedLineNumbers, getCommitSubjects, resolveAnalysisBaseRef } from '../../engine/shared/diffUtils';
+import { getCommitSubjects, getPrChangedLineNumbers, isCommitInBase, resolveAnalysisBaseRef } from '../../engine/shared/diffUtils';
+import { recordAnalysis, recordPullRequestMerged } from '../../engine/history/historyRecorder';
 import { EXTENSION_TO_LANGUAGE_ID, getNamingCaseStyles } from '../../engine/config/namingConfig';
 import { analyzeNaming } from '../../engine/analyzers/style/namingAnalyzer';
 import { analyzeIndentation } from '../../engine/analyzers/style/indentationAnalyzer';
@@ -164,8 +165,16 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 
 		const commit = getCurrentCommit(folder.uri.fsPath);
 		const branch = getCurrentBranch(folder.uri.fsPath);
-		const accumulated  = findingsPanel.getAccumulated(folder, branch);
-		const lastAnalyzedCommit = findingsPanel.getLastAnalyzedCommit(folder, branch);
+		const baseBranch = vscode.workspace.getConfiguration('codeadvisor').get<string>('baseBranch', 'main');
+		let accumulated  = findingsPanel.getAccumulated(folder, branch);
+		let lastAnalyzedCommit = findingsPanel.getLastAnalyzedCommit(folder, branch);
+
+		// si el ultimo commit analizado ya esta en la rama base, el PR se mergeo: los hallazgos viejos ya no aplican y se empieza de cero
+		if (lastAnalyzedCommit && isCommitInBase(folder.uri.fsPath, baseBranch, lastAnalyzedCommit)) {
+			recordPullRequestMerged(folder.uri.fsPath, folder.name, branch, lastAnalyzedCommit); // el historial cierra el ciclo de esta rama
+			accumulated = [];
+			lastAnalyzedCommit = undefined;
+		}
 
 		if (lastAnalyzedCommit === commit) {
 			publishDiagnostics(diagnosticCollection, folder, accumulated);
@@ -186,9 +195,12 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		// Se ignoran las carpetas de dependencias y de salida para no revisar codigo generado/de terceros
 		const excludePattern = `{${config.exclude.join(',')}}`;
 
-		const baseBranch = vscode.workspace.getConfiguration('codeadvisor').get<string>('baseBranch', 'main');
 		const baseRef =  resolveAnalysisBaseRef(folder.uri.fsPath, baseBranch, lastAnalyzedCommit);
-		const changedPaths = getChangedFile(folder.uri.fsPath, baseRef);
+		// en un analisis incremental (desde el ultimo commit analizado) solo cuentan los archivos que tambien son del PR:
+		// si la rama se actualizo con la base, el diff desde ese commit trae cambios de otras personas
+		const baseBranchRef = `origin/${baseBranch}`;
+		const prPaths = baseRef !== baseBranchRef ? new Set(getChangedFile(folder.uri.fsPath, baseBranchRef)) : undefined;
+		const changedPaths = getChangedFile(folder.uri.fsPath, baseRef).filter(path => !prPaths || prPaths.has(path));
 
 		const flaggedLinesByFile = new Map<string, Set<number>>();
 		for (const f of accumulated) {
@@ -232,7 +244,7 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 			const fileLabel = vscode.workspace.asRelativePath(uri); // Ruta relativa del archivo, para identificarlo en el reporte
 			const bytes = await vscode.workspace.fs.readFile(uri); // Se lee el contenido del archivo
 			const lines = Buffer.from(bytes).toString('utf8').split('\n'); // Se divide el texto del documento en lineas
-			const rawChangedLines = getChangedLineNumbers(folder.uri.fsPath, baseRef, fileLabel);
+			const rawChangedLines = getPrChangedLineNumbers(folder.uri.fsPath, baseRef, baseBranchRef, fileLabel);
 			const flagged = flaggedLinesByFile.get(fileLabel);
 			const changedLines = flagged
 				? new Set([...rawChangedLines].filter(line => !flagged.has(line)))
@@ -405,6 +417,11 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		publishDiagnostics(diagnosticCollection, folder, allFindings);
 		updateDecorations(allFindings);
 		findingsPanel.update(folder, allFindings, branch, commit);
+		// historial: un registro por commit analizado; si el commit ya esta en la rama base (el PR se mergeo y no hay nada nuevo)
+		// no se registra, seria un analisis vacio que apareceria como un PR abierto sin hallazgos
+		if (!isCommitInBase(folder.uri.fsPath, baseBranch, commit, false)) {
+			recordAnalysis(folder.uri.fsPath, folder.name, branch, commit, allFindings);
+		}
 
 		const reportContent = allFindings.length > 0 ? groupByPriority(allFindings) : 'No se encontraron hallazgos.';
 		const reportUri = vscode.Uri.joinPath(folder.uri, 'code-advisor-report.txt');

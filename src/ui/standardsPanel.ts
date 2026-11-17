@@ -8,6 +8,7 @@ import { RULE_PRIORITIES, loadConfig } from '../engine/config/configLoader';
 import { MANAGER_PASSWORD_HASH } from '../engine/config/managerKey';
 import { prepareConfigContent } from '../engine/config/configEditor';
 import { EXCLUDE_INFO, PARAM_LABELS, RULE_CATALOG } from '../engine/config/ruleCatalog';
+import { getHistory } from '../engine/history/historyClient';
 
 
 let currentPanel: vscode.WebviewPanel | undefined; //el panel abierto, solo puede haber uno
@@ -76,6 +77,53 @@ async function saveStandards(panel: vscode.WebviewPanel, message: { exclude: unk
     void vscode.window.showInformationMessage('Se copió al portapapeles. Pégalo en GLOBAL_STANDARDS (src/engine/config/globalStandards.ts) y publica la extensión para que aplique en todos los repos del equipo.');
 }
 
+function asNumber(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function asText(value: unknown): string | undefined {
+    return typeof value === 'string' ? value : undefined;
+}
+
+//responde a la pestaña Historial: la pagina no llama a la API, lo hace la extension para que el token no salga de aqui
+//solo acepta las consultas de esta lista
+async function answerHistoryRequest(panel: vscode.WebviewPanel, message: { id: number; query: string; params?: Record<string, unknown> }): Promise<void> {
+    const params = message.params ?? {};
+    try {
+        const client = getHistory();
+        if (!client || !client.isEnabled()) { throw new Error('El historial todavía no está configurado'); }
+
+        let data: unknown;
+        if (message.query === 'repos') {
+            data = await client.getRepos();
+        } else if (message.query === 'summary') {
+            data = await client.getSummary({ repoId: asNumber(params.repoId), days: asNumber(params.days) });
+        } else if (message.query === 'cycles') {
+            data = await client.getCycles({
+                repoId: asNumber(params.repoId),
+                state: asText(params.state),
+                search: asText(params.search),
+                limit: asNumber(params.limit),
+                offset: asNumber(params.offset),
+            });
+        } else if (message.query === 'commits') {
+            data = await client.getCycleCommits({
+                repoId: Number(params.repoId),
+                branch: String(params.branch ?? ''),
+                pullRequestId: asNumber(params.pullRequestId) ?? null,
+            });
+        } else if (message.query === 'findings') {
+            data = await client.getAnalysisFindings(Number(params.analysisId));
+        } else {
+            throw new Error('Consulta desconocida');
+        }
+
+        void panel.webview.postMessage({ command: 'historyResponse', id: message.id, ok: true, data });
+    } catch (error) {
+        void panel.webview.postMessage({ command: 'historyResponse', id: message.id, ok: false, error: (error as Error).message });
+    }
+}
+
 //abre el panel con la configuracion vigente del proyecto, solo si este equipo tiene la llave del gerente
 async function openStandardsPanel(): Promise<void> {
     const access = await checkManagerAccess();
@@ -106,6 +154,7 @@ async function openStandardsPanel(): Promise<void> {
             void panel.webview.postMessage({
                 command: 'load',
                 protectedMode: MANAGER_PASSWORD_HASH !== '',
+                historyEnabled: getHistory()?.isEnabled() ?? false,
                 exclude: config.exclude,
                 rules: config.rules,
                 priorities: { ...RULE_PRIORITIES, ...config.priorities },
@@ -115,6 +164,9 @@ async function openStandardsPanel(): Promise<void> {
         }
         if (message.command === 'save') {
             await saveStandards(panel, message);
+        }
+        if (message.command === 'historyRequest') {
+            await answerHistoryRequest(panel, message);
         }
     });
 }
@@ -183,6 +235,56 @@ function getHtml(webview: vscode.Webview): string {
                 button.primary:hover { background: var(--vscode-button-hoverBackground); }
                 button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
                 .status.error { color: var(--vscode-errorForeground); }
+                [hidden] { display: none !important; }
+                .tabs { display: flex; gap: 4px; margin: 0 0 14px; border-bottom: 1px solid var(--vscode-widget-border); }
+                .tab-button { background: none; border: none; border-bottom: 2px solid transparent; padding: 8px 14px; color: var(--vscode-descriptionForeground); cursor: pointer; font-size: inherit; }
+                .tab-button.active { color: var(--vscode-foreground); border-bottom-color: var(--vscode-focusBorder); font-weight: 600; }
+                .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 0 0 12px; }
+                .toolbar input[type=search] { flex: 1; min-width: 180px; width: auto; margin: 0; }
+                .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 12px; }
+                .metric { background: var(--vscode-editor-inactiveSelectionBackground, rgba(128, 128, 128, 0.12)); padding: 10px 12px; }
+                .metric-label, .muted { opacity: 0.75; font-size: 12px; }
+                .metric-value { font-size: 22px; font-weight: 600; margin: 2px 0; }
+                .metric-value.good, .funnel-number.good { color: #73c991; }
+                .metric-value.bad, .funnel-number.bad { color: #ff8080; }
+                .metric-extra { display: flex; gap: 4px; flex-wrap: wrap; font-size: 12px; opacity: 0.85; }
+                .box { border: 1px solid var(--vscode-widget-border); padding: 10px 12px; margin: 0 0 12px; }
+                .box-title { font-weight: 600; margin: 0 0 8px; }
+                .trend { display: flex; align-items: flex-end; gap: 10px; height: 120px; }
+                .week { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; gap: 4px; }
+                .pair { display: flex; align-items: flex-end; gap: 3px; height: 92px; }
+                .bar-detected, .bar-resolved { width: 12px; }
+                .bar-detected { background: #64b4ff; }
+                .bar-resolved { background: #73c991; }
+                .legend { margin: 8px 0 0; font-size: 12px; opacity: 0.85; }
+                .swatch { display: inline-block; width: 10px; height: 10px; margin: 0 4px 0 8px; vertical-align: -1px; }
+                .rule-row { display: grid; grid-template-columns: minmax(0, 1.6fr) 54px minmax(0, 1fr) 30px auto; gap: 10px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--vscode-widget-border); }
+                .rule-row:last-child { border-bottom: none; }
+                .track { height: 6px; background: var(--vscode-editor-inactiveSelectionBackground, rgba(128, 128, 128, 0.2)); }
+                .track span { display: block; height: 100%; background: #64b4ff; }
+                .chip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; white-space: nowrap; }
+                .chip.Alta { background: rgba(255, 90, 90, 0.18); color: #ff8080; }
+                .chip.Media { background: rgba(255, 200, 60, 0.18); color: #e0b03a; }
+                .chip.Baja, .chip.state-open { background: rgba(100, 180, 255, 0.18); color: #6fa8dc; }
+                .chip.state-merged, .chip.status-new, .chip.status-resolved { background: rgba(115, 201, 145, 0.2); color: #73c991; }
+                .chip.status-persisting { background: rgba(128, 128, 128, 0.2); }
+                .mono { font-family: var(--vscode-editor-font-family); font-size: 12px; }
+                .cycle { border: 1px solid var(--vscode-widget-border); margin: 0 0 10px; }
+                .cycle-head { display: flex; gap: 10px; align-items: center; padding: 10px 12px; cursor: pointer; user-select: none; }
+                .cycle-chevron { opacity: 0.7; }
+                .cycle-meta { margin-left: auto; font-size: 12px; opacity: 0.75; }
+                .funnel { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 0 12px 12px; }
+                .funnel-number { font-size: 18px; font-weight: 600; line-height: 1.2; }
+                .funnel-bar { flex: 1; min-width: 150px; }
+                .sev { display: flex; height: 8px; overflow: hidden; background: var(--vscode-editor-inactiveSelectionBackground, rgba(128, 128, 128, 0.2)); }
+                .cycle-body { border-top: 1px solid var(--vscode-widget-border); padding: 10px 12px; }
+                .commit-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 132px 70px; gap: 10px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--vscode-widget-border); cursor: pointer; }
+                .commit-row.header { cursor: default; opacity: 0.75; font-size: 12px; }
+                .commit-row.selected { background: var(--vscode-list-activeSelectionBackground, rgba(128, 128, 128, 0.2)); }
+                .finding-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.7fr) 64px 76px; gap: 10px; align-items: center; padding: 5px 8px; border-bottom: 1px solid var(--vscode-widget-border); }
+                .finding-row.resolved { opacity: 0.6; }
+                .finding-row.resolved .finding-rule { text-decoration: line-through; }
+                .more { text-align: center; margin: 12px 0; }
             </style>
             </head>
             <body>
@@ -195,6 +297,9 @@ function getHtml(webview: vscode.Webview): string {
                     let lastSent = null; //lo ultimo que se mando a guardar
                     let groupsBox = null;
                     let statusBox = null;
+                    let standardsBox = null; //contenedor de la pestaña Estandares
+                    let historyBox = null; //contenedor de la pestaña Historial
+                    let activeTab = 'standards';
                     //lo que el gerente va capturando; texts guarda el texto de los campos de lista y JSON hasta que se guarda
                     const state = { rules: {}, priorities: {}, texts: {}, expanded: {}, closedGroups: {}, query: '', exclude: '' };
 
@@ -203,6 +308,7 @@ function getHtml(webview: vscode.Webview): string {
                         if (message.command === 'load') { data = message; resetState(); render(); }
                         if (message.command === 'saved') { onSaved(); }
                         if (message.command === 'error') { setStatus(message.message, true); }
+                        if (message.command === 'historyResponse') { onHistoryResponse(message); }
                     });
 
                     function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -294,7 +400,9 @@ function getHtml(webview: vscode.Webview): string {
                         return names.filter(matches).sort((a, b) => infoOf(a).name.localeCompare(infoOf(b).name, 'es'));
                     }
 
-                    function render() {
+                    //dibuja la pestaña de estandares dentro de su contenedor (root se redefine aqui para no tocar el resto de la funcion)
+                    function renderStandards() {
+                        const root = standardsBox;
                         root.textContent = '';
                         root.appendChild(el('h2', { text: 'Estándares del equipo' }));
                         if (!data.protectedMode) {
@@ -314,7 +422,7 @@ function getHtml(webview: vscode.Webview): string {
                         const saveButton = el('button', { className: 'primary', text: 'Guardar' });
                         saveButton.addEventListener('click', save);
                         const discardButton = el('button', { className: 'secondary', text: 'Descartar cambios' });
-                        discardButton.addEventListener('click', () => { resetState(); render(); setStatus('Cambios descartados.', false); });
+                        discardButton.addEventListener('click', () => { resetState(); renderStandards(); setStatus('Cambios descartados.', false); });
                         root.appendChild(el('div', { className: 'footer' }, [saveButton, discardButton, statusBox]));
 
                         renderGroups();
@@ -482,7 +590,7 @@ function getHtml(webview: vscode.Webview): string {
                             state.expanded[problem.rule] = true;
                             state.query = '';
                             state.closedGroups[state.priorities[problem.rule] || 'General'] = false;
-                            render();
+                            renderStandards();
                             setStatus(problem.text, true);
                             const card = document.querySelector('[data-card="' + problem.rule + '"]');
                             if (card && card.scrollIntoView) { card.scrollIntoView({ block: 'center' }); }
@@ -498,6 +606,403 @@ function getHtml(webview: vscode.Webview): string {
                     function onSaved() {
                         if (lastSent) { data.rules = lastSent.rules; data.priorities = lastSent.priorities; data.exclude = lastSent.exclude; }
                         setStatus('Copiado al portapapeles. Pégalo en globalStandards.ts y publica la extensión.', false);
+                    }
+
+                    // ------------------------------------------------------------------ pestañas: Estandares e Historial
+
+                    //las dos pestañas viven en el mismo panel
+                    function render() {
+                        root.textContent = '';
+                        root.appendChild(el('div', { className: 'tabs' }, [tabButton('standards', 'Estándares'), tabButton('history', 'Historial')]));
+                        standardsBox = el('div');
+                        historyBox = el('div');
+                        root.appendChild(standardsBox);
+                        root.appendChild(historyBox);
+                        renderStandards();
+                        renderHistory();
+                        showTab(activeTab);
+                    }
+
+                    function tabButton(tab, title) {
+                        const button = el('button', { className: 'tab-button', text: title, dataset: { tab: tab } });
+                        button.addEventListener('click', () => showTab(tab));
+                        return button;
+                    }
+
+                    function showTab(tab) {
+                        activeTab = tab;
+                        standardsBox.hidden = tab !== 'standards';
+                        historyBox.hidden = tab !== 'history';
+                        document.querySelectorAll('.tab-button').forEach(button => {
+                            button.classList.toggle('active', button.dataset.tab === tab);
+                        });
+                        if (tab === 'history' && data.historyEnabled && !historyState.loaded && !historyState.loading) { loadHistory(); }
+                    }
+
+                    // ------------------------------------------------------------------ historial
+
+                    const PAGE_SIZE = 10;
+                    //lo que se ve en la pestaña Historial: filtros, resumen, PR cargados y cuales estan abiertos
+                    const historyState = { loaded: false, loading: false, repos: [], repoId: '', state: 'all', days: 30, search: '', summary: null, cycles: [], total: 0, version: 0, expanded: {}, commits: {}, selected: {}, findings: {}, timer: null };
+                    const pendingRequests = {};
+                    let nextRequestId = 0;
+                    let repoSelect = null;
+                    let historyStatus = null;
+                    let summaryBox = null;
+                    let cyclesBox = null;
+                    let moreBox = null;
+
+                    //le pide algo a la extension (que consulta la API) y regresa una promesa con la respuesta
+                    function askHistory(query, params) {
+                        return new Promise((resolve, reject) => {
+                            nextRequestId += 1;
+                            pendingRequests[nextRequestId] = { resolve: resolve, reject: reject };
+                            vscode.postMessage({ command: 'historyRequest', id: nextRequestId, query: query, params: params || {} });
+                        });
+                    }
+
+                    function onHistoryResponse(message) {
+                        const pending = pendingRequests[message.id];
+                        if (!pending) { return; }
+                        delete pendingRequests[message.id];
+                        if (message.ok) { pending.resolve(message.data); } else { pending.reject(new Error(message.error)); }
+                    }
+
+                    function option(value, text, selected) { return el('option', { value: value, text: text, selected: !!selected }); }
+                    function chip(className, text) { return el('span', { className: 'chip ' + className, text: String(text) }); }
+
+                    function formatDate(iso, utc) {
+                        if (!iso) { return ''; }
+                        const options = { day: 'numeric', month: 'short' };
+                        if (utc) { options.timeZone = 'UTC'; }
+                        return new Date(iso).toLocaleDateString('es-MX', options);
+                    }
+
+                    function dateRange(cycle) {
+                        const first = formatDate(cycle.firstAnalyzedAt);
+                        const last = formatDate(cycle.lastAnalyzedAt);
+                        return first === last ? first : first + ' al ' + last;
+                    }
+
+                    //arma la pestaña una sola vez, los filtros no se vuelven a crear para no perder lo que se esta escribiendo
+                    function renderHistory() {
+                        historyBox.textContent = '';
+                        if (!data.historyEnabled) {
+                            historyBox.appendChild(el('div', { className: 'banner', text: 'El historial todavía no está configurado. Pon la dirección de la API en HISTORY_API_URL (src/engine/history/historyConfig.ts) y publica la extensión.' }));
+                            return;
+                        }
+
+                        repoSelect = el('select', {}, [option('', 'Todos los repos', true)]);
+                        const stateSelect = el('select', {}, [option('all', 'Todos', true), option('open', 'Abiertos'), option('merged', 'Mergeados')]);
+                        const daysSelect = el('select', {}, [option('7', 'Últimos 7 días'), option('30', 'Últimos 30 días', true), option('90', 'Últimos 90 días')]);
+                        const searchBox = el('input', { type: 'search', placeholder: 'Buscar rama, commit o autor' });
+                        searchBox.setAttribute('aria-label', 'Buscar en el historial');
+                        const refreshButton = el('button', { className: 'secondary', text: 'Actualizar' });
+
+                        repoSelect.addEventListener('change', () => { historyState.repoId = repoSelect.value; refreshAll(); });
+                        stateSelect.addEventListener('change', () => { historyState.state = stateSelect.value; runHistory(reloadCycles(true)); });
+                        daysSelect.addEventListener('change', () => { historyState.days = Number(daysSelect.value); runHistory(reloadSummary()); });
+                        searchBox.addEventListener('input', () => {
+                            clearTimeout(historyState.timer);
+                            historyState.timer = setTimeout(() => { historyState.search = searchBox.value.trim(); runHistory(reloadCycles(true)); }, 300);
+                        });
+                        refreshButton.addEventListener('click', () => { loadHistory(); });
+
+                        historyBox.appendChild(el('div', { className: 'toolbar' }, [repoSelect, stateSelect, daysSelect, searchBox, refreshButton]));
+                        historyStatus = el('div');
+                        summaryBox = el('div');
+                        cyclesBox = el('div');
+                        moreBox = el('div', { className: 'more' });
+                        [historyStatus, summaryBox, cyclesBox, moreBox].forEach(box => historyBox.appendChild(box));
+                    }
+
+                    //un error al consultar se muestra en la pestaña con un boton para reintentar
+                    function showHistoryError(error) {
+                        historyStatus.textContent = '';
+                        historyStatus.appendChild(el('div', { className: 'banner', text: 'No se pudo cargar el historial: ' + error.message }));
+                        const retry = el('button', { className: 'secondary', text: 'Reintentar' });
+                        retry.addEventListener('click', () => { loadHistory(); });
+                        historyStatus.appendChild(retry);
+                    }
+
+                    //corre una consulta y si falla muestra el error
+                    function runHistory(promise) { promise.catch(showHistoryError); }
+
+                    function fillRepoSelect() {
+                        repoSelect.textContent = '';
+                        repoSelect.appendChild(option('', 'Todos los repos', historyState.repoId === ''));
+                        historyState.repos.forEach(repo => repoSelect.appendChild(option(String(repo.id), repo.name, String(repo.id) === historyState.repoId)));
+                    }
+
+                    async function loadHistory() {
+                        historyState.loading = true;
+                        historyStatus.textContent = 'Cargando historial...';
+                        try {
+                            historyState.repos = await askHistory('repos');
+                            fillRepoSelect();
+                            await Promise.all([reloadSummary(), reloadCycles(true)]);
+                            historyState.loaded = true;
+                            historyStatus.textContent = '';
+                        } catch (error) {
+                            showHistoryError(error);
+                        } finally {
+                            historyState.loading = false;
+                        }
+                    }
+
+                    function refreshAll() { runHistory(Promise.all([reloadSummary(), reloadCycles(true)])); }
+
+                    async function reloadSummary() {
+                        const params = { days: historyState.days };
+                        if (historyState.repoId !== '') { params.repoId = Number(historyState.repoId); }
+                        historyState.summary = await askHistory('summary', params);
+                        renderSummary();
+                    }
+
+                    //carga la primera pagina de PR (reset) o la siguiente; si los filtros cambian mientras llega la respuesta, se ignora
+                    async function reloadCycles(reset) {
+                        if (reset) { historyState.cycles = []; historyState.total = 0; historyState.version += 1; }
+                        const version = historyState.version;
+                        const params = { state: historyState.state, search: historyState.search, limit: PAGE_SIZE, offset: historyState.cycles.length };
+                        if (historyState.repoId !== '') { params.repoId = Number(historyState.repoId); }
+                        const page = await askHistory('cycles', params);
+                        if (version !== historyState.version) { return; }
+                        historyState.cycles = historyState.cycles.concat(page.items);
+                        historyState.total = page.total;
+                        renderCycles();
+                    }
+
+                    // ---- resumen (indicadores, tendencia y reglas mas incumplidas)
+
+                    function metric(label, value, extras, tone) {
+                        return el('div', { className: 'metric' }, [
+                            el('div', { className: 'metric-label', text: label }),
+                            el('div', { className: 'metric-value' + (tone ? ' ' + tone : ''), text: String(value) }),
+                            el('div', { className: 'metric-extra' }, extras),
+                        ]);
+                    }
+
+                    function renderSummary() {
+                        const summary = historyState.summary;
+                        summaryBox.textContent = '';
+                        if (!summary) { return; }
+
+                        const delta = summary.resolved - summary.resolvedPrevious;
+                        const deltaText = delta > 0 ? '+' + delta + ' vs. periodo anterior' : delta < 0 ? '−' + Math.abs(delta) + ' vs. periodo anterior' : 'igual que el periodo anterior';
+                        summaryBox.appendChild(el('div', { className: 'metrics' }, [
+                            metric('Abiertos ahora', summary.open.total, [chip('Alta', summary.open.Alta), chip('Media', summary.open.Media), chip('Baja', summary.open.Baja)]),
+                            metric('Corregidos', summary.resolved, [el('span', { text: deltaText })], 'good'),
+                            metric('Llegaron a main', summary.reachedMain, [el('span', { text: 'sin corregir' })], 'bad'),
+                            metric('Commits analizados', summary.commitCount, [el('span', { text: 'en ' + summary.cycleCount + ' PR' })]),
+                        ]));
+                        summaryBox.appendChild(renderTrend(summary.weekly));
+                        summaryBox.appendChild(renderTopRules(summary.topRules));
+                    }
+
+                    function renderTrend(weekly) {
+                        const peak = Math.max(1, ...weekly.map(week => Math.max(week.detected, week.resolved)));
+                        const box = el('div', { className: 'box' }, [el('div', { className: 'box-title', text: 'Tendencia semanal' })]);
+                        const trend = el('div', { className: 'trend' });
+                        weekly.forEach(week => {
+                            const detected = el('span', { className: 'bar-detected', title: week.detected + ' detectados' });
+                            const resolved = el('span', { className: 'bar-resolved', title: week.resolved + ' corregidos' });
+                            detected.style.height = Math.round(week.detected / peak * 92) + 'px';
+                            resolved.style.height = Math.round(week.resolved / peak * 92) + 'px';
+                            trend.appendChild(el('div', { className: 'week' }, [
+                                el('div', { className: 'pair' }, [detected, resolved]),
+                                el('span', { className: 'muted', text: formatDate(week.weekStart + 'T00:00:00Z', true) }),
+                            ]));
+                        });
+                        box.appendChild(trend);
+                        box.appendChild(el('div', { className: 'legend' }, [
+                            el('span', { className: 'swatch bar-detected' }), el('span', { text: 'Detectados' }),
+                            el('span', { className: 'swatch bar-resolved' }), el('span', { text: 'Corregidos' }),
+                        ]));
+                        return box;
+                    }
+
+                    function renderTopRules(topRules) {
+                        const box = el('div', { className: 'box' }, [el('div', { className: 'box-title', text: 'Reglas más incumplidas' })]);
+                        if (topRules.length === 0) {
+                            box.appendChild(el('div', { className: 'muted', text: 'Todavía no hay hallazgos registrados en este periodo.' }));
+                            return box;
+                        }
+
+                        const peak = topRules[0].count;
+                        topRules.forEach(item => {
+                            const priority = state.priorities[item.rule];
+                            const fill = el('span');
+                            fill.style.width = Math.round(item.count / peak * 100) + '%';
+                            const configure = el('button', { className: 'secondary', text: 'Configurar' });
+                            configure.addEventListener('click', () => goConfigure(item.rule));
+                            box.appendChild(el('div', { className: 'rule-row' }, [
+                                el('span', { text: infoOf(item.rule).name }),
+                                priority ? chip(priority, priority) : el('span'),
+                                el('div', { className: 'track' }, [fill]),
+                                el('span', { className: 'muted', text: String(item.count) }),
+                                configure,
+                            ]));
+                        });
+                        return box;
+                    }
+
+                    //lleva a la pestaña Estandares filtrada por la regla para cambiar su prioridad o desactivarla
+                    function goConfigure(rule) {
+                        state.query = rule;
+                        renderStandards();
+                        showTab('standards');
+                    }
+
+                    // ---- PR (ciclos): tarjetas con su embudo, commits y hallazgos
+
+                    function cycleKey(cycle) { return cycle.repoId + '|' + cycle.branch + '|' + (cycle.pullRequestId === null ? 'open' : cycle.pullRequestId); }
+
+                    function renderCycles() {
+                        cyclesBox.textContent = '';
+                        moreBox.textContent = '';
+                        if (historyState.cycles.length === 0) {
+                            cyclesBox.appendChild(el('div', { className: 'empty', text: 'No hay PR que coincidan con los filtros.' }));
+                            return;
+                        }
+                        historyState.cycles.forEach(cycle => cyclesBox.appendChild(renderCycle(cycle)));
+                        if (historyState.cycles.length < historyState.total) {
+                            const more = el('button', { className: 'secondary', text: 'Cargar más' });
+                            more.addEventListener('click', () => { runHistory(reloadCycles(false)); });
+                            moreBox.appendChild(more);
+                        }
+                    }
+
+                    function renderCycle(cycle) {
+                        const key = cycleKey(cycle);
+                        const isOpen = !!historyState.expanded[key];
+                        const head = el('div', { className: 'cycle-head' }, [
+                            el('span', { className: 'cycle-chevron', text: isOpen ? '▾' : '▸' }),
+                            el('span', { className: 'mono', text: cycle.branch }),
+                            chip('state-' + cycle.state, cycle.state === 'open' ? 'Abierto' : 'Mergeado'),
+                            el('span', { className: 'muted', text: historyState.repoId === '' && historyState.repos.length > 1 ? cycle.repoName : '' }),
+                            el('span', { className: 'cycle-meta', text: cycle.commitCount + (cycle.commitCount === 1 ? ' commit' : ' commits') + ' · ' + dateRange(cycle) }),
+                        ]);
+                        head.addEventListener('click', () => toggleCycle(cycle));
+                        const card = el('div', { className: 'cycle' }, [head, renderFunnel(cycle)]);
+                        if (isOpen) { card.appendChild(renderCycleBody(cycle, key)); }
+                        return card;
+                    }
+
+                    function funnelNumber(value, label, tone) {
+                        return el('div', {}, [
+                            el('div', { className: 'funnel-number' + (tone ? ' ' + tone : ''), text: String(value) }),
+                            el('div', { className: 'muted', text: label }),
+                        ]);
+                    }
+
+                    //detectados, corregidos y los que quedaron (abiertos ahora, o los que llegaron a main si el PR ya se mergeo)
+                    function renderFunnel(cycle) {
+                        const bySeverity = cycle.detectedBySeverity;
+                        const total = Math.max(1, cycle.detected);
+                        const bar = el('div', { className: 'sev' });
+                        [['Alta', '#ff5a5a'], ['Media', '#ffc83c'], ['Baja', '#64b4ff']].forEach(pair => {
+                            const segment = el('span');
+                            segment.style.width = (bySeverity[pair[0]] / total * 100) + '%';
+                            segment.style.background = pair[1];
+                            bar.appendChild(segment);
+                        });
+                        const isOpen = cycle.state === 'open';
+                        return el('div', { className: 'funnel' }, [
+                            funnelNumber(cycle.detected, 'Detectados'),
+                            el('span', { className: 'muted', text: '→' }),
+                            funnelNumber(cycle.resolved, 'Corregidos', 'good'),
+                            el('span', { className: 'muted', text: '→' }),
+                            funnelNumber(cycle.unresolved, isOpen ? 'Abiertos ahora' : 'Llegaron a main', isOpen ? '' : 'bad'),
+                            el('div', { className: 'funnel-bar' }, [bar, el('div', { className: 'muted', text: 'Detectados: Alta ' + bySeverity.Alta + ' · Media ' + bySeverity.Media + ' · Baja ' + bySeverity.Baja })]),
+                        ]);
+                    }
+
+                    function toggleCycle(cycle) {
+                        const key = cycleKey(cycle);
+                        historyState.expanded[key] = !historyState.expanded[key];
+                        renderCycles();
+                        if (historyState.expanded[key] && !historyState.commits[key]) { loadCommits(cycle, key); }
+                    }
+
+                    //al abrir un PR se cargan sus commits y se selecciona el ultimo para mostrar sus hallazgos
+                    async function loadCommits(cycle, key) {
+                        historyState.commits[key] = { loading: true };
+                        renderCycles();
+                        try {
+                            const commits = await askHistory('commits', { repoId: cycle.repoId, branch: cycle.branch, pullRequestId: cycle.pullRequestId });
+                            historyState.commits[key] = { items: commits };
+                            if (commits.length > 0 && !historyState.selected[key]) { historyState.selected[key] = commits[commits.length - 1].analysisId; }
+                            renderCycles();
+                            if (historyState.selected[key]) { loadFindings(historyState.selected[key]); }
+                        } catch (error) {
+                            historyState.commits[key] = { error: error.message };
+                            renderCycles();
+                        }
+                    }
+
+                    async function loadFindings(analysisId) {
+                        const existing = historyState.findings[analysisId];
+                        if (existing && !existing.error) { return; }
+                        historyState.findings[analysisId] = { loading: true };
+                        renderCycles();
+                        try {
+                            historyState.findings[analysisId] = { items: await askHistory('findings', { analysisId: analysisId }) };
+                        } catch (error) {
+                            historyState.findings[analysisId] = { error: error.message };
+                        }
+                        renderCycles();
+                    }
+
+                    function selectCommit(key, analysisId) {
+                        historyState.selected[key] = analysisId;
+                        renderCycles();
+                        loadFindings(analysisId);
+                    }
+
+                    function renderCycleBody(cycle, key) {
+                        const body = el('div', { className: 'cycle-body' });
+                        const commits = historyState.commits[key];
+                        if (!commits || commits.loading) { body.appendChild(el('div', { className: 'muted', text: 'Cargando commits...' })); return body; }
+                        if (commits.error) { body.appendChild(el('div', { className: 'status error', text: 'No se pudieron cargar los commits: ' + commits.error })); return body; }
+                        if (commits.items.length === 0) { body.appendChild(el('div', { className: 'muted', text: 'Este PR no tiene commits registrados.' })); return body; }
+
+                        body.appendChild(el('div', { className: 'commit-row header' }, [el('span', { text: 'Commit' }), el('span', { text: 'Mensaje y autor' }), el('span', { text: 'Abiertos A / M / B' }), el('span', { text: 'Cambio' })]));
+                        commits.items.forEach(commit => {
+                            const row = el('div', { className: 'commit-row' + (historyState.selected[key] === commit.analysisId ? ' selected' : '') }, [
+                                el('span', { className: 'mono', text: commit.commitHash.slice(0, 7) }),
+                                el('span', {}, [el('div', { text: commit.subject || '(sin mensaje)' }), el('div', { className: 'muted', text: commit.authorName + ' · ' + formatDate(commit.analyzedAt) })]),
+                                el('span', {}, [chip('Alta', commit.open.Alta), document.createTextNode(' '), chip('Media', commit.open.Media), document.createTextNode(' '), chip('Baja', commit.open.Baja)]),
+                                el('span', { className: 'muted', text: '+' + commit.newCount + ' −' + commit.resolvedCount }),
+                            ]);
+                            row.addEventListener('click', () => selectCommit(key, commit.analysisId));
+                            body.appendChild(row);
+                        });
+
+                        const selected = commits.items.find(commit => commit.analysisId === historyState.selected[key]);
+                        if (selected) { body.appendChild(renderFindings(selected)); }
+                        return body;
+                    }
+
+                    //hallazgos del commit elegido, cada uno con su estado: nuevo, persiste o resuelto en ese commit
+                    function renderFindings(commit) {
+                        const box = el('div', { className: 'box' });
+                        box.appendChild(el('div', { className: 'box-title' }, [el('span', { text: 'Hallazgos en ' }), el('span', { className: 'mono', text: commit.commitHash.slice(0, 7) })]));
+
+                        const loaded = historyState.findings[commit.analysisId];
+                        if (!loaded || loaded.loading) { box.appendChild(el('div', { className: 'muted', text: 'Cargando hallazgos...' })); return box; }
+                        if (loaded.error) { box.appendChild(el('div', { className: 'status error', text: 'No se pudieron cargar los hallazgos: ' + loaded.error })); return box; }
+                        if (loaded.items.length === 0) { box.appendChild(el('div', { className: 'muted', text: 'En este commit no había hallazgos.' })); return box; }
+
+                        const labels = { new: 'Nuevo', persisting: 'Persiste', resolved: 'Resuelto' };
+                        loaded.items.forEach(item => {
+                            box.appendChild(el('div', { className: 'finding-row' + (item.status === 'resolved' ? ' resolved' : '') }, [
+                                el('span', { className: 'mono', text: item.file + (item.line ? ':' + item.line : '') }),
+                                el('span', { className: 'finding-rule', text: infoOf(item.rule).name, title: item.message }),
+                                chip(item.severity, item.severity),
+                                chip('status-' + item.status, labels[item.status] || item.status),
+                            ]));
+                        });
+                        return box;
                     }
 
                     //avisa a la extension que la pagina ya esta escuchando para que le mande la configuracion
