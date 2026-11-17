@@ -1,6 +1,9 @@
 import * as vscode from 'vscode';
 import { Minimatch } from 'minimatch';
 import type { NamingCaseStyles } from './namingConfig';
+import { GLOBAL_STANDARS } from './globalStandards';
+import { fetchStandards } from './standardsClient';
+
 
 export interface RuleToggle {
     enabled: boolean;
@@ -139,6 +142,7 @@ export interface SolidFrontendAiConfig extends RuleToggle {
 // reglas que todavia no tienen parametros propios configurables, solo enabled/disabled
 export interface CodeAdvisorConfig {
     exclude: string[];
+    priorities?: Record<string, Priority>; //prioridades que el gerente cambio respecto a las de RULE_PRIORITIES
     rules: {
         dtoAutoMapper: DtoAutoMapperConfig;
         parameters: ParametersConfig;
@@ -176,8 +180,6 @@ export interface CodeAdvisorConfig {
         solidFrontendAi: SolidFrontendAiConfig;
     };
 }
-
-const CONFIG_FILE_NAME = 'code-advisor.config.json';
 
 //valores por defecto: son exactamente los que estan hardcodeados en cada analizador, para que un 
 //workspace sin code-advisor.config.json se comporte igual que antes.
@@ -292,20 +294,21 @@ function deepMerge<T>(base: T, override: unknown): T {
     return result as T;
 }
 
-export async function loadConfig(workspaceRoot: vscode.Uri): Promise<CodeAdvisorConfig> {
-    const configUri = vscode.Uri.joinPath(workspaceRoot, CONFIG_FILE_NAME);
-    try {
-        const bytes = await vscode.workspace.fs.readFile(configUri);
-        const userConfig = JSON.parse(Buffer.from(bytes).toString('utf8'));
-        return deepMerge(DEFAULT_CONFIG, userConfig);
-    } catch (error) {
-        if ((error as vscode.FileSystemError).code !== 'FileNotFound') {
-            vscode.window.showWarningMessage(
-                `Code Advisor: no se pude leer "${CONFIG_FILE_NAME}" (${(error as Error).message}); se uso la configuracion por defecto.`
-            );
-        }
-        return DEFAULT_CONFIG;
+
+//aplica las prioridades que cambio el gerente sobre las de por defecto, ignora lo que no sea Alta, Media o Baja
+function applyPriorities(overrides: unknown): void {
+    activePriorities = { ...RULE_PRIORITIES };
+    if (overrides === null || typeof overrides !== 'object') { return; }
+    for (const [rule, priority] of Object.entries(overrides as Record<string, unknown>)) {
+        if (priority === 'Alta' || priority === 'Media' || priority === 'Baja') { activePriorities[rule] = priority; }
     }
+}
+
+export async function loadConfig(_workspaceRoot?: vscode.Uri): Promise<CodeAdvisorConfig> {
+    const remote = await fetchStandards();
+    const config = deepMerge(DEFAULT_CONFIG, remote ?? GLOBAL_STANDARS); //GLOBAL_STANDARS es el respaldo si la API no responde
+    applyPriorities(config.priorities);
+    return config;
 }
 
 //precompila los minimatch una vez por config(se llama por cada archivo)
@@ -358,4 +361,12 @@ export const RULE_PRIORITIES: Record<string, Priority> = {
     tableAlias: 'Baja',
     indentation: 'Baja',
     commentLanguage: 'Baja',
+}
+
+//prioridades vigentes: las de RULE_PRIORITIES con los cambios del gerente encima, se recalculan en cada loadConfig
+let activePriorities: Record<string, Priority> = RULE_PRIORITIES;
+
+//prioridad con la que se reporta un hallazgo de la regla, undefined si la regla no tiene una asignada
+export function getRulePriority(rule: string): Priority | undefined {
+    return activePriorities[rule];
 }

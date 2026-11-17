@@ -1,0 +1,24 @@
+{
+	"name": "codeadvisor-history-api",
+	"version": "0.0.1",
+	"private": true,
+	"description": "API del historial de hallazgos de CodeAdvisor (Node, TypeScript y MySQL 8)",
+	"main": "dist/index.js",
+	"scripts": {
+		"build": "tsc -p .",
+		"start": "node --env-file=.env dist/index.js",
+		"dev": "tsx watch --env-file=.env src/index.ts",
+		"db:init": "tsx --env-file=.env src/initDb.ts",
+		"test": "tsx --test test/history.test.ts"
+	},
+	"dependencies": {
+		"express": "^4.21.2",
+		"mysql2": "^3.11.5"
+	},
+	"devDependencies": {
+		"@types/express": "^4.17.21",
+		"@types/node": "24.x",
+		"tsx": "^4.19.2",
+		"typescript": "^6.0.3"
+	}
+}

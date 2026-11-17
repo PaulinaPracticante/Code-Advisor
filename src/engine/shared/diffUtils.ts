@@ -1,15 +1,16 @@
 import { execFileSync } from 'child_process';
 
 // devuelve el conjunto de numeros de linea (1-indezados) agregados/modificados en "filePath"
-// entre la rama base y HEAD, leyendo los encabezados de hunk de un diff son contexto
-export function getChangedLineNumbers(workspaceRoot: string, baseBranch: string, filePath: string): Set<number> {
+// entre "baseRef" y HEAD, leyendo los encabezados de hunk de un diff son contexto.
+// baseRef puede ser la rama base completa ("origin/main") o un commit puntual (ver resolveAnalysisBaseRef)
+export function getChangedLineNumbers(workspaceRoot: string, baseRef: string, filePath: string): Set<number> {
     const changedLines = new Set<number>();
     let output: string;
 
     try {
         output = execFileSync(
             'git',
-            ['diff', '--unified=0', '--diff-filter=ACMR', `origin/${baseBranch}...HEAD`, '--', filePath],
+            ['diff', '--unified=0', '--diff-filter=ACMR', `${baseRef}...HEAD`, '--', filePath],
             { cwd: workspaceRoot, encoding: 'utf8' }
         );
     } catch (error) {
@@ -68,4 +69,48 @@ export function rangeIntersectChangedLines(changedLines: Set<number>, startLine:
         if (changedLines.has(line)) { return true;}
     }
     return false;
+}
+
+export function resolveAnalysisBaseRef(workspaceRoot: string, baseBranch: string, lastAnalyzedCommit?: string): string {
+    execFileSync('git', ['fetch', 'origin', baseBranch], { cwd: workspaceRoot, encoding: 'utf8' });
+    const baseBranchRef = `origin/${baseBranch}`;
+    if (!lastAnalyzedCommit) { return baseBranchRef; }
+
+    try {
+        execFileSync('git', ['merge-base', '--is-ancestor', lastAnalyzedCommit, 'HEAD'], { cwd: workspaceRoot, encoding: 'utf8' });
+        return lastAnalyzedCommit;
+    } catch {
+        return baseBranchRef;
+    }
+}
+
+// true si "commit" ya esta dentro de origin/<baseBranch>, es decir, el PR de esa rama ya se mergeo.
+// solo detecta los merge normales ("Merge pull request"): con squash los commits de la rama no quedan dentro de la base
+// fetchFirst en false evita volver a descargar la rama base cuando ya se acaba de hacer en la misma revision
+export function isCommitInBase(workspaceRoot: string, baseBranch: string, commit: string, fetchFirst = true): boolean {
+    if (fetchFirst) {
+        try {
+            execFileSync('git', ['fetch', 'origin', baseBranch], { cwd: workspaceRoot, encoding: 'utf8' });
+        } catch {
+            // sin red se usa la copia que ya se tiene de origin/<baseBranch>
+        }
+    }
+
+    try {
+        execFileSync('git', ['merge-base', '--is-ancestor', commit, `origin/${baseBranch}`], { cwd: workspaceRoot, encoding: 'utf8' });
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+// lineas que cambiaron desde "baseRef" y ademas son parte del PR (los cambios de la rama contra la rama base).
+// en un analisis incremental baseRef es el ultimo commit analizado: si la rama se actualizo con la base, el diff desde ese
+// commit trae tambien cambios de otras personas, que no son del PR y no se deben revisar
+export function getPrChangedLineNumbers(workspaceRoot: string, baseRef: string, baseBranchRef: string, filePath: string): Set<number> {
+    const sinceBaseRef = getChangedLineNumbers(workspaceRoot, baseRef, filePath);
+    if (baseRef === baseBranchRef) { return sinceBaseRef; }
+
+    const inPr = getChangedLineNumbers(workspaceRoot, baseBranchRef, filePath);
+    return new Set([...sinceBaseRef].filter(line => inPr.has(line)));
 }

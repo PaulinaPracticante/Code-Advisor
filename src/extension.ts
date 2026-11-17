@@ -7,6 +7,8 @@ import { publishDiagnostics } from './ui/diagnostics';
 import { registerDecorationRefresh, updateDecorations } from './ui/decorations';
 import { FindingsPanel } from './ui/findingsPanel';
 import { registerSaveWatcher } from './ui/saveWatcher';
+import { registerStandardsCommands } from './ui/standardsPanel';
+import { initHistory } from './engine/history/historyClient';
 
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
@@ -55,6 +57,8 @@ export function activate(context: vscode.ExtensionContext) {
 	registerCommitWatcher(context, diagnosticCollection, findingsPanel);
 	registerDecorationRefresh(context);
 	registerSaveWatcher(context, diagnosticCollection, findingsPanel);
+	registerStandardsCommands(context);
+	initHistory(context.globalState, String(context.extension.packageJSON.version)); // historial de hallazgos (apagado si HISTORY_API_URL esta vacia)
 
 	context.subscriptions.push(disposable); //Se registran los comandos
 }

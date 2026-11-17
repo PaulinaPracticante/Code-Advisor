@@ -49,8 +49,26 @@
       {
         "command": "codeadvisor.codeReviewer",
         "title": "Revisar Código"
+      },
+      {
+        "command": "codeadvisor.configureStandards",
+        "title": "Configurar Estándares (Gerente)",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "codeadvisor.setManagerPassword",
+        "title": "Establecer contraseña del Gerente"
       }
-    ]
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "codeadvisor.configureStandards",
+          "when": "view == codeadvisor.findingsView",
+          "group": "navigation"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
