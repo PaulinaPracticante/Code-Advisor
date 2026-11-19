@@ -30,7 +30,7 @@ const QUEUE_KEY = 'codeadvisor.historyQueue';
 const MAX_QUEUE_SIZE = 300; //si pasa de aqui se descartan los mas viejos
 const DEFAULT_TIMEOUT_MS = 8000;
 
-//respuestas que vale la pena reintentar (sin red, servidor caido, token mal puesto, muchas peticiones); con otro 4xx el dato esta mal y reintentar no sirve
+//respuestas que vale la pena reintentar (sin red, servidor caido, token mal puesto, muchas peticiones); 
 const RETRY_STATUSES = new Set([401, 403, 408, 429]);
 
 export class HistoryClient {

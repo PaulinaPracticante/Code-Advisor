@@ -53,6 +53,90 @@ function diffValue(base: unknown, next: unknown): unknown {
     return canonicalize(base) === canonicalize(next) ? undefined : next;
 }
 
+function isTextList(value: unknown): value is string[] {
+    return Array.isArray(value) && value.every(item => typeof item === 'string');
+}
+
+//un patron que no compila haria fallar todo el analisis, por eso se revisa antes de guardarlo
+function regexProblem(pattern: string): string | undefined {
+    try {
+        new RegExp(pattern);
+        return undefined;
+    } catch (error) {
+        return (error as Error).message;
+    }
+}
+
+//revisa los parametros que tienen una estructura propia (capas, repositorios) o que son expresiones regulares;
+//regresa el mensaje del primer problema, undefined si todo esta bien
+function validateRuleDetails(rules: Record<string, unknown>): string | undefined {
+    const layers = (rules.layers as Record<string, unknown> | undefined)?.layers;
+    if (layers !== undefined) {
+        if (!Array.isArray(layers)) { return 'Las capas del proyecto deben ser una lista.'; }
+        for (const [index, layer] of layers.entries()) {
+            const label = 'La capa ' + (index + 1);
+            if (!isPlainObject(layer)) { return label + ' no tiene el formato esperado.'; }
+            if (typeof layer.name !== 'string' || layer.name.trim() === '') { return label + ' necesita un nombre.'; }
+            if (!isTextList(layer.folders) || layer.folders.filter(folder => folder.trim() !== '').length === 0) {
+                return 'La capa "' + layer.name + '" necesita al menos un nombre de carpeta.';
+            }
+            if (typeof layer.required !== 'boolean') { return 'La capa "' + layer.name + '" debe indicar si es obligatoria.'; }
+            if (layer.requiredIfDatabaseDetected !== undefined && typeof layer.requiredIfDatabaseDetected !== 'boolean') {
+                return 'La capa "' + layer.name + '" tiene un valor no válido en "solo si usa base de datos".';
+            }
+        }
+    }
+
+    const databasePatterns = (rules.layers as Record<string, unknown> | undefined)?.databaseUsagePatterns;
+    if (databasePatterns !== undefined) {
+        if (!isTextList(databasePatterns)) { return 'Los patrones de base de datos deben ser texto.'; }
+        for (const pattern of databasePatterns) {
+            const problem = regexProblem(pattern);
+            if (problem) { return 'El patrón de base de datos "' + pattern + '" no es válido: ' + problem; }
+        }
+    }
+
+    const repos = (rules.folderNaming as Record<string, unknown> | undefined)?.repos;
+    if (repos !== undefined) {
+        if (!Array.isArray(repos)) { return 'Los repositorios con estructura definida deben ser una lista.'; }
+        const seen = new Set<string>();
+        for (const [index, repo] of repos.entries()) {
+            const label = 'El repositorio ' + (index + 1);
+            if (!isPlainObject(repo)) { return label + ' no tiene el formato esperado.'; }
+            if (typeof repo.name !== 'string' || repo.name.trim() === '') { return label + ' necesita un nombre.'; }
+            const key = repo.name.trim().toLowerCase();
+            if (seen.has(key)) { return 'El repositorio "' + repo.name + '" está repetido.'; }
+            seen.add(key);
+            if (repo.naming !== 'none' && repo.naming !== 'PascalCase' && repo.naming !== 'kebab-case') {
+                return 'La convención de nombres de "' + repo.name + '" debe ser PascalCase, kebab-case o sin revisar.';
+            }
+            if (!isTextList(repo.requiredFolders)) { return 'Las carpetas obligatorias de "' + repo.name + '" deben ser texto.'; }
+        }
+    }
+
+    const commitPattern = (rules.commitMessage as Record<string, unknown> | undefined)?.pattern;
+    if (commitPattern !== undefined) {
+        if (typeof commitPattern !== 'string' || commitPattern.trim() === '') { return 'El formato del título del commit no puede estar vacío.'; }
+        const problem = regexProblem(commitPattern);
+        if (problem) { return 'El formato del título del commit no es una expresión regular válida: ' + problem; }
+    }
+
+    const objectUsage = rules.objectUsage as Record<string, unknown> | undefined;
+    if (objectUsage !== undefined) {
+        for (const language of ['csharp', 'typescript', 'javascript']) {
+            const exempt = (objectUsage[language] as Record<string, unknown> | undefined)?.exemptPatterns;
+            if (exempt === undefined) { continue; }
+            if (!isTextList(exempt)) { return 'Las líneas permitidas de object (' + language + ') deben ser texto.'; }
+            for (const pattern of exempt) {
+                const problem = regexProblem(pattern);
+                if (problem) { return 'El patrón "' + pattern + '" de object (' + language + ') no es válido: ' + problem; }
+            }
+        }
+    }
+
+    return undefined;
+}
+
 //recibe lo que mando el panel (reglas, prioridades y rutas excluidas), lo valida contra los valores por defecto
 //y regresa solo lo que el gerente cambio, que es lo que se firma y se guarda en code-advisor.config.json
 export function prepareConfigContent(submitted: unknown): PrepareResult {
@@ -76,6 +160,9 @@ export function prepareConfigContent(submitted: unknown): PrepareResult {
             }
         }
     }
+
+    const detailsProblem = validateRuleDetails(submitted.rules);
+    if (detailsProblem) { return { error: detailsProblem }; }
 
     //las prioridades solo pueden ser Alta, Media o Baja y de reglas que reportan hallazgos
     for (const [ruleName, priority] of Object.entries(submitted.priorities)) {

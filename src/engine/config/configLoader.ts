@@ -61,6 +61,20 @@ export interface LayersConfig extends RuleToggle {
     databaseUsagePatterns: string[];
 }
 
+//como deben llamarse las carpetas de un repositorio: sin revisar, en PascalCase o en kebab-case
+export type FolderNamingStyle = 'none' | 'PascalCase' | 'kebab-case';
+
+//estructura de un repositorio: carpetas que deben existir (rutas relativas a la raiz) y la convencion de nombres
+export interface FolderRepoRule {
+    name: string; //nombre de la carpeta del repositorio en VS Code
+    requiredFolders: string[];
+    naming: FolderNamingStyle;
+}
+
+export interface FolderNamingConfig extends RuleToggle {
+    repos: FolderRepoRule[];
+}
+
 export interface InterfacesConfig extends RuleToggle {
     contractFolders: string[];
     includeAbstractClasses: boolean;
@@ -152,7 +166,7 @@ export interface CodeAdvisorConfig {
         layers: LayersConfig;
         interfaces: InterfacesConfig;
         indentation: RuleToggle;
-        folderNaming: RuleToggle;
+        folderNaming: FolderNamingConfig;
         ifBraces: RuleToggle;
         ternaries: RuleToggle;
         varUsage: RuleToggle;
@@ -261,7 +275,48 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
         // iniciales en mayuscula + ":" o "_" + descripcion, ej. ABCD:Corrige validacion del login
         commitMessage: { enabled: true, pattern: '^[A-Z]{2,5}[:_]\\s?\\S.*$' },
         indentation: { enabled: true },
-        folderNaming: { enabled: true },
+        folderNaming: {
+            enabled: true,
+            repos: [
+                {
+                    name: 'ManagementView_v2',
+                    naming: 'PascalCase',
+                    requiredFolders: [
+                        'public',
+                        'public/assets',
+                        'src',
+                        'src/hooks',
+                        'src/api/auth',
+                        'src/api/customers',
+                        'src/api/dashboard',
+                        'src/api/shipments',
+                        'src/shared/components',
+                    ],
+                },
+                {
+                    name: 'OnSiteV2_MX',
+                    naming: 'kebab-case',
+                    requiredFolders: [
+                        'src',
+                        'src/actions',
+                        'src/component',
+                        'src/component/cards',
+                        'src/component/inputs',
+                        'src/components/navigation',
+                        'src/components/navigation/drawer',
+                        'src/components/navigation/sidebar',
+                        'src/components/navigation/tabs',
+                        'src/components/pagination',
+                        'src/components/typography',
+                        'src/interfaces',
+                        'src/interfaces/auth',
+                        'src/interfaces/locations',
+                        'src/interfaces/shipments',
+                        'src/interfaces/tables',
+                    ],
+                },
+            ],
+        },
         ifBraces: { enabled: true },
         ternaries: { enabled: true },
         varUsage: { enabled: true },
