@@ -101,7 +101,7 @@ export function analyzeFileStatic(
 			analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage)
 	}
 
-	if (config.rules.requestHandlers.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+	if (config.rules.requestHandlers.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
 			analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers)
 	}
 

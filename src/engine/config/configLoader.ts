@@ -103,26 +103,6 @@ export interface ComponentLocationConfig extends RuleToggle {
     exemptFiles: string[];
 }
 
-export interface EnglishOnlyConfig extends RuleToggle {
-    model: string;
-}
-
-export interface SemanticNameConfig extends RuleToggle {
-    model: string;
-}
-
-export interface SingleResponsibilityConfig extends RuleToggle {
-    model: string;
-}
-
-export interface CodeComplexityConfig extends RuleToggle {
-    model: string;
-}
-
-export interface CommentLanguageConfig extends RuleToggle {
-    model: string;
-}
-
 export interface AiReviewConfig {
     model: string;
     maxTokens: number;
@@ -180,11 +160,11 @@ export interface CodeAdvisorConfig {
         duplicateCode: DuplicateCodeConfig;
         requestHandlers: RequestHnadlersConfig;
         componentLocation: ComponentLocationConfig;
-        englishOnly: EnglishOnlyConfig;
-        semanticNaming: SemanticNameConfig;
-        singleResponsibility: SingleResponsibilityConfig;
-        codeComplexity: CodeComplexityConfig;
-        commentLanguage: CommentLanguageConfig;
+        englishOnly: RuleToggle; //estas 5 reglas de IA van dentro de la llamada combinada, que usa el modelo de aiReview
+        semanticNaming: RuleToggle;
+        singleResponsibility: RuleToggle;
+        codeComplexity: RuleToggle;
+        commentLanguage: RuleToggle;
         queryViews: QueryViewsConfig;
         tableAlias: RuleToggle;
         transactions: RuleToggle;
@@ -261,11 +241,11 @@ export const DEFAULT_CONFIG: CodeAdvisorConfig = {
             exemptFolders: ['app', 'pages', 'screens', 'views'],
             exemptFiles: ['App', 'main', 'index', '_app', '_document'],
         },
-        englishOnly: { enabled: true, model: 'claude-sonnet-5-5' },
-        semanticNaming: { enabled: true, model: 'claude-sonnet-5-5'},
-        singleResponsibility: { enabled: true, model: 'claude-sonnet-5-5' },
-        codeComplexity: { enabled: true, model: 'claude-sonnet-5-5' },
-        commentLanguage: { enabled: true, model: 'claude-sonnet-5-5' },
+        englishOnly: { enabled: true },
+        semanticNaming: { enabled: true },
+        singleResponsibility: { enabled: true },
+        codeComplexity: { enabled: true },
+        commentLanguage: { enabled: true },
         aiReview: { model: 'claude-sonnet-5-5', maxTokens: 8000 },
         solidFrontend: { enabled: true, maxProps: 8 },
         solidFrontendAi: { enabled: true, model: 'claude-sonnet-5-5', maxTokens: 4096 },
@@ -359,9 +339,32 @@ function applyPriorities(overrides: unknown): void {
     }
 }
 
+const typeOf = (v: unknown) => Array.isArray(v) ? 'array' : v === null ? 'null' : typeof v;
+function cleanRules(stored: unknown, defaults: unknown): unknown {
+    if (typeOf(stored) !== typeOf(defaults)) { return undefined; }          // otro tipo: se descarta
+    if (typeOf(defaults) !== 'object') { return stored; }
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(stored as object)) {
+        if (!(key in (defaults as object))) { continue; }                   // propiedad o regla que ya no existe
+        const v = cleanRules((stored as Record<string, unknown>)[key], (defaults as Record<string, unknown>)[key]);
+        if (v !== undefined) { out[key] = v; }
+    }
+    return out;
+}
+function sanitizeStored(stored: unknown): Record<string, unknown> {
+    const s = (stored ?? {}) as Record<string, unknown>; const clean: Record<string, unknown> = {};
+    if (Array.isArray(s.exclude) && s.exclude.every(i => typeof i === 'string')) { clean.exclude = s.exclude; }
+    if (s.rules && typeof s.rules === 'object') { clean.rules = cleanRules(s.rules, DEFAULT_CONFIG.rules); }
+    if (s.priorities && typeof s.priorities === 'object') {
+        clean.priorities = Object.fromEntries(Object.entries(s.priorities as object).filter(([r, p]) => r in RULE_PRIORITIES && ['Alta', 'Media', 'Baja'].includes(p as string)));
+    }
+    return clean;
+}
+
+
 export async function loadConfig(_workspaceRoot?: vscode.Uri): Promise<CodeAdvisorConfig> {
     const remote = await fetchStandards();
-    const config = deepMerge(DEFAULT_CONFIG, remote ?? GLOBAL_STANDARS); //GLOBAL_STANDARS es el respaldo si la API no responde
+    const config = deepMerge(DEFAULT_CONFIG, sanitizeStored(remote ?? GLOBAL_STANDARS)); //GLOBAL_STANDARS es el respaldo si la API no responde
     applyPriorities(config.priorities);
     return config;
 }

@@ -4,7 +4,11 @@
 
 import { callClaude } from "../../shared/claudeClient";
 import { collectChangesFunction, findEnclosingClassName } from "../../shared/functionExtraction";
-import { SemanticNameConfig } from "../../config/configLoader";
+import { RuleToggle } from '../../config/configLoader';
+
+//este analizador ya no lo llama nadie (lo reemplazo la revision combinada de IA, que usa el modelo de aiReview),
+//por eso el modelo ya no forma parte de la configuracion de la regla y se pide aqui
+type SemanticNameConfig = RuleToggle & { model: string };
 
 //forma de hallazgo que devuelve claude 
 interface NamingViolation {

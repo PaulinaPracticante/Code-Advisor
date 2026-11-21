@@ -7,7 +7,7 @@ import * as crypto from 'crypto';
 import { RULE_PRIORITIES, loadConfig } from '../engine/config/configLoader';
 import { MANAGER_PASSWORD_HASH } from '../engine/config/managerKey';
 import { prepareConfigContent } from '../engine/config/configEditor';
-import { EXCLUDE_INFO, FIELD_EDITORS, PARAM_HELP, PARAM_LABELS, RULE_ALIASES, RULE_CATALOG, SCOPE_LABELS } from '../engine/config/ruleCatalog';
+import { EXCLUDE_INFO, FIELD_EDITORS, PARAM_HELP, PARAM_LABELS, PARAM_OPTIONS, RULE_ALIASES, RULE_CATALOG, SCOPE_LABELS } from '../engine/config/ruleCatalog';
 import { pushStandards } from '../engine/config/standardsClient';
 import { getHistory } from '../engine/history/historyClient';
 
@@ -174,6 +174,7 @@ async function openStandardsPanel(): Promise<void> {
                 catalog: { ...aliasEntries(), ...RULE_CATALOG, __exclude: EXCLUDE_INFO },
                 paramLabels: PARAM_LABELS,
                 paramHelp: PARAM_HELP,
+                paramOptions: PARAM_OPTIONS, //parametros de texto con valores fijos, se editan con una lista desplegable
                 fieldEditors: FIELD_EDITORS, //parametros que se editan con algo mas que un cuadro de texto
                 scopeLabels: SCOPE_LABELS, //Backend, Frontend y Compartidas
             });
@@ -413,6 +414,11 @@ function getHtml(webview: vscode.Webview): string {
                         return data.paramLabels[rule + '.' + path.join('.')] || data.paramLabels['*.' + last] || last;
                     }
 
+                    //valores permitidos de un parametro de texto, undefined si acepta cualquier texto
+                    function optionsFor(rule, path) {
+                        return data.paramOptions[rule + '.' + path.join('.')] || data.paramOptions['*.' + path[path.length - 1]];
+                    }
+
                     //una regla sin interruptor (solo prioridad) cuenta como activa
                     function isActive(name) {
                         const values = state.rules[name];
@@ -499,7 +505,6 @@ function getHtml(webview: vscode.Webview): string {
                         if (!data.protectedMode) {
                             root.appendChild(el('div', { className: 'banner', text: 'La extensión todavía no trae la contraseña del gerente, por eso la configuración aún no está protegida. Usa el comando "Establecer contraeña del Gerente".' }));
                         }
-                        root.appendChild(el('p', { className: 'hint', text: 'Al guardar se escribe directo en el archivo.Protege que no se abra en el panel sin la contraseña.' }));
 
                         const search = el('input', { type: 'search', placeholder: 'Buscar una regla por nombre o descripción...', value: state.query });
                         search.setAttribute('aria-label', 'Buscar regla');
@@ -646,8 +651,14 @@ function getHtml(webview: vscode.Webview): string {
                             input = el('input', { type: 'checkbox', checked: value });
                             input.addEventListener('change', () => { setAt(state.rules[name], path, input.checked); });
                         } else if (kind === 'number') {
-                            input = el('input', { type: 'number', value: String(value) });
+                            input = el('input', { type: 'number', min: '0', step: '1', value: String(value) }); //solo enteros desde 0
                             input.addEventListener('input', () => { setAt(state.rules[name], path, input.value.trim() === '' ? NaN : Number(input.value)); });
+                        } else if (kind === 'string' && optionsFor(name, path)) {
+                            const options = optionsFor(name, path);
+                            //un valor guardado que ya no es valido se muestra marcado para que el gerente lo cambie, si no parecería tener la primera opción
+                            const invalid = options.indexOf(value) < 0 ? [el('option', { value: value, text: value + ' (no válido)', selected: true })] : [];
+                            input = el('select', {}, invalid.concat(options.map(option => el('option', { value: option, text: option, selected: option === value }))));
+                            input.addEventListener('change', () => { setAt(state.rules[name], path, input.value); });
                         } else if (kind === 'string') {
                             input = el('input', { type: 'text', value: value });
                             input.addEventListener('input', () => { setAt(state.rules[name], path, input.value); });
@@ -1037,7 +1048,7 @@ function getHtml(webview: vscode.Webview): string {
                                 if (isEditorField(name, path)) { return; } //su valor ya esta armado, se limpia en finalizeEditors
                                 const key = name + '.' + path.join('.');
                                 const label = infoOf(name).name + ' › ' + labelFor(name, path);
-                                if (kind === 'number' && isNaN(value)) { problem = { rule: name, text: label + ' debe ser un número.' }; }
+                                if (kind === 'number' && (!Number.isInteger(value) || value < 0)) { problem = { rule: name, text: label + ' debe ser un número entero mayor o igual a 0.' }; }
                                 else if (kind === 'lines') { edits.push([path, toLines(state.texts[key])]); }
                                 else if (kind === 'json') {
                                     try { edits.push([path, JSON.parse(state.texts[key])]); }

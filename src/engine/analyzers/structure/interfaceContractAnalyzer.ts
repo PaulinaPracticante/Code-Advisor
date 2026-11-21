@@ -612,7 +612,8 @@ export async function analyzeInterfaceContracts (
         const isJs = fileLabel.endsWith('.js');
         if (!isTs && !isJs) { continue; }
 
-        const importMap = importsByFile.get(fileLabel)!;
+        const importMap = importsByFile.get(fileLabel);
+        if (!importMap) { continue; }
         const referencedNames = isTs ? findReferencedContractNames(lines) : findReferencedJsContractNames(lines);
 
         for (const name of referencedNames) {

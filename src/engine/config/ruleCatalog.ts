@@ -21,6 +21,21 @@ export const SCOPE_LABELS: Record<RuleScope, string> = {
     shared: 'Compartidas',
 };
 
+//parametros de texto que solo aceptan algunos valores, la clave es "regla.parametro" y "*.parametro" sirve para cualquier regla
+//la pantalla los muestra como lista desplegable y configEditor.ts rechaza cualquier otro valor
+const CASES = ['PascalCase', 'camelCase', 'UPPER_SNAKE_CASE', 'kebab-case'];
+export const PARAM_OPTIONS: Record<string, string[]> = {
+    '*.expected': ['fetch', 'axios'],
+    '*.classCase': CASES, '*.functionCase': CASES, '*.methodCase': CASES,
+    '*.variableCase': CASES, '*.constantCase': CASES, '*.componentCase': CASES,
+};
+
+//valores permitidos de un parametro, undefined si acepta cualquier texto; path es la ruta del parametro dentro de la regla
+export function getParamOptions(rule: string, path: string[]): string[] | undefined {
+    return PARAM_OPTIONS[rule + '.' + path.join('.')] ?? PARAM_OPTIONS['*.' + path[path.length - 1]];
+}
+
+
 //cada regla de la configuracion mas projectGuidelines (que solo tiene prioridad), si se agrega una regla nueva
 //a CodeAdvisorConfig TypeScript obliga a agregar aqui su nombre, su descripcion y su tipo de proyecto
 type CatalogKey = keyof CodeAdvisorConfig['rules'] | 'projectGuidelines';
@@ -32,7 +47,7 @@ export const RULE_CATALOG: Record<CatalogKey, RuleInfo> = {
     async: { name: 'Programación asíncrona', description: 'Las operaciones de entrada y salida (base de datos, archivos, red) deben usar async y await.', scope: 'backend' },
     objectUsage: { name: 'Uso de object como tipo', description: 'No se debe usar object como tipo genérico, hay que usar el tipo concreto.', scope: 'backend' },
     requestModels: { name: 'Modelos de request con valores iniciales', description: 'Las propiedades de los modelos de request que pueden venir vacías deben iniciarse con un valor por defecto (int en 0, string vacío).', scope: 'backend' },
-    requestHandlers: { name: 'Manejador de peticiones HTTP', description: 'Cada tipo de proyecto debe usar el manejador de peticiones definido: fetch o axios.', scope: 'backend' },
+    requestHandlers: { name: 'Manejador de peticiones HTTP', description: 'Cada tipo de proyecto debe usar el manejador de peticiones definido: fetch o axios.', scope: 'frontend' },
     duplicateCode: { name: 'Código duplicado', description: 'Detecta bloques de código repetidos que conviene reutilizar en una función o componente.', scope: 'backend' },
     folderNaming: { name: 'Estructura y nombres de carpetas', description: 'Revisa que las carpetas obligatorias de cada repositorio existan y estén nombradas con su convención.', scope: 'frontend' },
     projectGuidelines: { name: 'Reglas propias del proyecto (CLAUDE.md)', description: 'Con IA, revisa también las reglas particulares que cada proyecto define en su archivo CLAUDE.md.', scope: 'shared' },

@@ -3,6 +3,7 @@
 // ----------------------------------------------------------------------------------------------------
 
 import { DEFAULT_CONFIG, Priority, RULE_PRIORITIES } from './configLoader';
+import { getParamOptions, getRuleName, PARAM_LABELS } from './ruleCatalog';
 
 const PRIORITIES: Priority[] = ['Alta', 'Media', 'Baja'];
 
@@ -134,6 +135,57 @@ function validateRuleDetails(rules: Record<string, unknown>): string | undefined
         }
     }
 
+    const langs = (rules.interfaces as Record<string, unknown> | undefined)?.lenguages;
+    if (langs !== undefined) {
+        if (!isTextList(langs) || langs.some(l => !['cs', 'ts', 'tsx', 'js', 'jsx'].includes(l))) {
+            return 'Las extensiones que se revisan solo pueden ser cs, ts, tsx, js o jsx.';
+        }
+    }
+
+    return undefined;
+}
+
+//nombre que ve el gerente de un parametro, con el mismo formato de la pantalla: Regla › Grupo › Parametro
+function paramLabel(rule: string, path: string[]): string {
+    const parts = [getRuleName(rule)];
+    for (let index = 0; index < path.length; index++) {
+        const key = rule + '.' + path.slice(0, index + 1).join('.');
+        parts.push(PARAM_LABELS[key] ?? PARAM_LABELS['*.' + path[index]] ?? path[index]);
+    }
+    return parts.join(' › ');
+}
+
+//revisa los valores que el gerente escribe a mano: que cada parametro exista y sea del mismo tipo que el de por defecto,
+//que un numero sea entero y no negativo, que un texto no este vacio y que un parametro de lista cerrada tenga uno de sus valores
+function validateValues(rules: Record<string, unknown>): string | undefined {
+    const defaults = DEFAULT_CONFIG.rules as unknown as Record<string, unknown>;
+
+    const visit = (rule: string, path: string[], value: unknown, base: unknown): string | undefined => {
+        const label = paramLabel(rule, path);
+        if (typeName(base) !== typeName(value)) { return 'El valor de "' + label + '" debe ser de tipo ' + typeName(base) + '.'; }
+
+        if (isPlainObject(base) && isPlainObject(value)) {
+            for (const key of Object.keys(value)) {
+                if (!has(base, key)) { return 'El parámetro "' + paramLabel(rule, path.concat(key)) + '" no existe.'; }
+                const problem = visit(rule, path.concat(key), value[key], base[key]);
+                if (problem) { return problem; }
+            }
+        } else if (typeof base === 'number') {
+            if (!Number.isSafeInteger(value) || (value as number) < 0) { return '"' + label + '" debe ser un número entero mayor o igual a 0.'; }
+        } else if (typeof base === 'string') {
+            if ((value as string).trim() === '') { return '"' + label + '" no puede estar vacío.'; }
+            const options = getParamOptions(rule, path);
+            if (options && !options.includes(value as string)) { return '"' + label + '" debe ser uno de: ' + options.join(', ') + '.'; }
+        } else if (Array.isArray(base) && base.length > 0 && base.every(item => typeof item === 'string') && !isTextList(value)) {
+            return '"' + label + '" debe ser una lista de texto.';
+        }
+        return undefined;
+    };
+
+    for (const [rule, value] of Object.entries(rules)) {
+        const problem = visit(rule, [], value, defaults[rule]);
+        if (problem) { return problem; }
+    }
     return undefined;
 }
 
@@ -163,6 +215,9 @@ export function prepareConfigContent(submitted: unknown): PrepareResult {
 
     const detailsProblem = validateRuleDetails(submitted.rules);
     if (detailsProblem) { return { error: detailsProblem }; }
+
+    const valuesProblem = validateValues(submitted.rules);
+    if (valuesProblem) { return { error: valuesProblem }; }
 
     //las prioridades solo pueden ser Alta, Media o Baja y de reglas que reportan hallazgos
     for (const [ruleName, priority] of Object.entries(submitted.priorities)) {
