@@ -447,23 +447,7 @@ async function reviewWithProgress(folder: vscode.WorkspaceFolder, diagnosticColl
 		// --------------------------------------------------------------------------------------
 		// ---- REPORTE ---------------------------------------------------------------------------
 
-		// Se junta todo en un archivo de texto en la raiz del workspace y se abre para revisarlo
-		function groupByPriority(findings: Finding[]): string {
-			const order: Array<'Alta' | 'Media' | 'Baja'> = ['Alta', 'Media', 'Baja'];
-			const groups: Record<string, Finding[]> = { 'Alta': [], 'Media': [], 'Baja': [] };
 
-			for (const f of findings) {
-				groups[f.severity].push(f);
-			}
-
-			const formatFinding = (f: Finding) =>
-				`${f.file}${f.line !== undefined ? ':' + f.line : ''} - ${f.message}`;
-
-			return order
-				.filter(p => groups[p].length > 0)
-				.map(p => `=== Prioridad ${p.toUpperCase()} (${groups[p].length}) ===\n${groups[p].map(formatFinding).join('\n')}`)
-				.join('\n\n');
-		}
 
 		report('Guardando los resultados...');
 		const allFindings = mergeFindings(accumulated, findings);
@@ -477,12 +461,8 @@ async function reviewWithProgress(folder: vscode.WorkspaceFolder, diagnosticColl
 			recordAnalysis(folder.uri.fsPath, folder.name, branch, commit, allFindings);
 		}
 
-		const reportContent = allFindings.length > 0 ? groupByPriority(allFindings) : 'No se encontraron hallazgos.';
-		const reportUri = vscode.Uri.joinPath(folder.uri, 'code-advisor-report.txt');
-		await vscode.workspace.fs.writeFile(reportUri, Buffer.from(reportContent, 'utf8'));
-
-		const reportDocument = await vscode.workspace.openTextDocument(reportUri);
-		await vscode.window.showTextDocument(reportDocument);
+		
+	
 
 		endPhase('reporte');
 		console.log(`CodeAdvisor: analisis terminado en ${Date.now() - startedAt} ms -> ${phaseTimes.join(', ')}`);

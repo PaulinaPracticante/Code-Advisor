@@ -6,9 +6,10 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { Pool } from 'mysql2/promise';
 import { HttpError } from './errors';
 import { closePullRequest, saveAnalysis } from './historyService';
+import { isProtected, updatePassword, verifyPassword } from './managerService';
 import { CycleState, getSummary, listAnalysisFindings, listCycleCommits, listCycles, listRepos } from './queryService';
 import { getCurrentStandards, listStandardsHistory, saveStandards } from './standardsService';
-import { parseAnalysis, parseMerge, parseStandardsContent, readInt } from './validation';
+import { parseAnalysis, parseManagerPasswordChange, parseManagerVerify, parseMerge, parseStandardsContent, readInt } from './validation';
 
 type Handler = (request: Request, response: Response) => Promise<void>;
 
@@ -94,6 +95,23 @@ export function createRouter(pool: Pool): Router {
 	//versiones anteriores, de la mas nueva a la mas vieja
 	router.get('/standards/history', wrap(async (request, response) => {
 		response.json(await listStandardsHistory(pool, readInt(request.query.limit, 20, 1, 100)));
+	}));
+
+	//el panel pregunta si el proyecto exige contraseña antes de pedirla
+	router.get('/manager/protected', wrap(async (_request, response) => {
+		response.json({ protectedMode: await isProtected(pool) });
+	}));
+
+	//el panel manda la contraseña capturada para entrar
+	router.post('/manager/verify', wrap(async (request, response) => {
+		response.json({ ok: await verifyPassword(pool, parseManagerVerify(request.body)) });
+	}));
+
+	//cambia la contraseña, si ya habia una le pedi la actual
+	router.post('/manager/password', wrap(async (request, response) => {
+		const { currentPassword, newPassword } = parseManagerPasswordChange(request.body);
+		await updatePassword(pool, currentPassword, newPassword);
+		response.status(204).end();
 	}));
 
 	return router;

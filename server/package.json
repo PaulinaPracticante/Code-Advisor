@@ -12,10 +12,12 @@
 		"test": "tsx --test test/history.test.ts"
 	},
 	"dependencies": {
+		"bcryptjs": "^3.0.3",
 		"express": "^4.21.2",
 		"mysql2": "^3.11.5"
 	},
 	"devDependencies": {
+		"@types/bcryptjs": "^2.4.6",
 		"@types/express": "^4.17.21",
 		"@types/node": "24.x",
 		"tsx": "^4.19.2",

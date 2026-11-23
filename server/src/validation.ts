@@ -8,6 +8,8 @@ import { AnalysisInput, FindingInput, MergeInput, RepoInput, SEVERITIES, Severit
 const MAX_FINDINGS = 5000;
 const MAX_STANDARS_BYTES = 200_000;
 
+const MIN_PASSWORD_LENGTH = 6;
+
 function badRequest(message: string): never {
 	throw new HttpError(400, message);
 }
@@ -143,4 +145,16 @@ export function parseStandardsContent(body: unknown): Record<string, unknown> {
 		return badRequest('content es demasiado grande');
 	}
 	return body.content as Record<string, unknown>;
+}
+
+export function parseManagerVerify(body: unknown): string {
+	if (!isObject(body)) { return badRequest('el cuerpo debe ser un objeto JSON'); }
+	return typeof body.password === 'string' ? body.password : '';
+}
+
+export function parseManagerPasswordChange(body: unknown): { currentPassword?: string; newPassword: string } {
+	if (!isObject(body)) { return badRequest(' el cuerpo debe ser un objeto JSON'); }
+	const newPassword = readText(body, 'newPassword', 200, 'newPassword');
+	if (newPassword.length < MIN_PASSWORD_LENGTH) { return badRequest(`newPassword debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres`); }
+	return { currentPassword: readOptionalText(body, 'currentPassword', 200) ?? undefined, newPassword };
 }

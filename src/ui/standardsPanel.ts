@@ -3,10 +3,9 @@
 // ----------------------------------------------------------------------------------------------------
 
 import * as vscode from 'vscode';
-import * as crypto from 'crypto';
 import { RULE_PRIORITIES, loadConfig } from '../engine/config/configLoader';
-import { MANAGER_PASSWORD_HASH } from '../engine/config/managerKey';
 import { prepareConfigContent } from '../engine/config/configEditor';
+import { changeManagerPassword, isManagerProtected, verifyManagerPassword } from '../engine/config/managerClient';
 import { EXCLUDE_INFO, FIELD_EDITORS, PARAM_HELP, PARAM_LABELS, PARAM_OPTIONS, RULE_ALIASES, RULE_CATALOG, SCOPE_LABELS } from '../engine/config/ruleCatalog';
 import { pushStandards } from '../engine/config/standardsClient';
 import { getHistory } from '../engine/history/historyClient';
@@ -22,12 +21,9 @@ function getNonce(): string {
     return text;
 }
 
-function hashPassword(password: string): string {
-    return crypto.createHash('sha256').update(password, 'utf-8').digest('hex');
-}
-//revisa que este equipo tenga la llave del gerente y que sea la misma cuya llave publica esta dentro de la extension
+//revisa que la contraseña capturada sea la que esta guardada en el backend; si el panel aun no esta protegido, pasa derecho
 async function checkManagerAccess(): Promise<{ ok: true } | { error: string }> {
-    if (MANAGER_PASSWORD_HASH === '') { return { ok: true }; }
+    if (!(await isManagerProtected())) { return { ok: true }; }
 
     const password = await vscode.window.showInputBox({
         prompt: 'Contraseña de gerente para configurar los estandares',
@@ -36,26 +32,22 @@ async function checkManagerAccess(): Promise<{ ok: true } | { error: string }> {
     });
     if (password === undefined) { return { error: '' }; }
 
-    if (hashPassword(password) !== MANAGER_PASSWORD_HASH) {
-        return { error: 'Contraseña incorrecta. '};
+    if (!(await verifyManagerPassword(password))) {
+        return { error: 'Contraseña incorrecta.' };
     }
     return { ok: true };
 }
 
-async function setManagerPassword(): Promise<void> {
-    const password = await vscode.window.showInputBox({
-        prompt: 'Nueva contraseña de gerente',
-        password: true,
-        ignoreFocusOut: true,
-    });
-    if (password === undefined || password === '') { return; }
-
-    const hash = hashPassword(password); 
-    const copy = await vscode.window.showInformationMessage(
-        'Pega este hash en MANAGER_PASSWORD_HASH (src/engine/config/managerKey.ts) y publica la extensión para que el panel pida esta contraseña.',
-        'Copiar hash'
-    );
-    if (copy === 'Copiar hash') { await vscode.env.clipboard.writeText(hash); }
+//lo llama el webview cuando el gerente llena el formulario "Cambiar contraseña"; si ya habia una pide la actual
+async function handleChangePassword(panel: vscode.WebviewPanel, message: { currentPassword?: string; newPassword: string }): Promise<void> {
+    try {
+        await changeManagerPassword(message.currentPassword, message.newPassword);
+        void panel.webview.postMessage({ command: 'passwordChanged' });
+        void vscode.window.showInformationMessage('Contraseña del gerente actualizada.');
+    } catch (error) {
+        const text = 'No se pudo cambiar la contraseña: ' + (error instanceof Error ? error.message : String(error));
+        void panel.webview.postMessage({ command: 'passwordError', message: text });
+    }
 }
 
 //firma y guarda en el proyecto lo que el gerente capturo en el panel
@@ -165,7 +157,7 @@ async function openStandardsPanel(): Promise<void> {
         if (message.command === 'ready') {
             void panel.webview.postMessage({
                 command: 'load',
-                protectedMode: MANAGER_PASSWORD_HASH !== '',
+                protectedMode: await isManagerProtected(),
                 historyEnabled: getHistory()?.isEnabled() ?? false,
                 exclude: config.exclude,
                 rules: config.rules,
@@ -185,13 +177,15 @@ async function openStandardsPanel(): Promise<void> {
         if (message.command === 'historyRequest') {
             await answerHistoryRequest(panel, message);
         }
+        if (message.command === 'changePassword') {
+            await handleChangePassword(panel, message);
+        }
     });
 }
 
 //registra los comandos del gerente
 export function registerStandardsCommands(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
-        vscode.commands.registerCommand('codeadvisor.setManagerPassword', () => setManagerPassword()),
         vscode.commands.registerCommand('codeadvisor.configureStandards', () => openStandardsPanel())
     );
 }
@@ -209,7 +203,11 @@ function getHtml(webview: vscode.Webview): string {
                 h2 { font-weight: 500; margin: 0 0 8px; }
                 .hint { opacity: 0.8; margin: 0 0 12px; }
                 .banner { padding: 8px 10px; margin: 0 0 12px; background: var(--vscode-inputValidation-warningBackground); border: 1px solid var(--vscode-inputValidation-warningBorder); }
-                input[type=text], input[type=number], input[type=search], textarea, select { background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); padding: 4px 6px; font-family: inherit; font-size: inherit; }
+                input[type=text], input[type=number], input[type=search], input[type=password], textarea, select { background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border, var(--vscode-widget-border)); padding: 4px 6px; font-family: inherit; font-size: inherit; }
+                .password-box { margin: 0 0 12px; padding: 8px 12px; background: var(--vscode-editor-inactiveSelectionBackground, rgba(128, 128, 128, 0.12)); }
+                .password-row { display: flex; gap: 8px; align-items: center; margin: 6px 0; flex-wrap: wrap; }
+                .password-row label { width: 170px; flex: none; opacity: 0.85; }
+                .password-row input { flex: 1; min-width: 160px; }
                 input[type=search] { width: 100%; box-sizing: border-box; padding: 6px 8px; margin: 0 0 12px; }
                 textarea { width: 100%; box-sizing: border-box; font-family: var(--vscode-editor-font-family); }
                 .group-header { display: flex; align-items: center; gap: 8px; padding: 10px 4px; cursor: pointer; user-select: none; border-bottom: 1px solid var(--vscode-widget-border); margin-top: 8px; }
@@ -362,8 +360,9 @@ function getHtml(webview: vscode.Webview): string {
                     let activeTab = 'standards';
                     //lo que el gerente va capturando; texts guarda el texto de los campos de lista y JSON hasta que se guarda
                     //scope es el tipo de proyecto elegido en el filtro (all, backend, frontend o shared); testers guarda lo que se escribio en las cajas de prueba
-                    const state = { rules: {}, priorities: {}, texts: {}, expanded: {}, closedGroups: {}, query: '', scope: 'all', exclude: '', testers: {} };
+                    const state = { rules: {}, priorities: {}, texts: {}, expanded: {}, closedGroups: {}, query: '', scope: 'all', exclude: '', testers: {}, passwordOpen: false };
                     let scopeBox = null; //contenedor de los botones de tipo de proyecto
+                    let passwordStatusBox = null; //mensaje de error/exito del formulario de contraseña
 
                     window.addEventListener('message', event => {
                         const message = event.data;
@@ -371,6 +370,8 @@ function getHtml(webview: vscode.Webview): string {
                         if (message.command === 'saved') { onSaved(); }
                         if (message.command === 'error') { setStatus(message.message, true); }
                         if (message.command === 'historyResponse') { onHistoryResponse(message); }
+                        if (message.command === 'passwordChanged') { onPasswordChanged(); }
+                        if (message.command === 'passwordError') { onPasswordError(message.message); }
                     });
 
                     function clone(value) { return JSON.parse(JSON.stringify(value)); }
@@ -497,14 +498,46 @@ function getHtml(webview: vscode.Webview): string {
                         });
                     }
 
+                    //formulario para poner o cambiar la contraseña del gerente; si ya habia una pide la actual
+                    function renderPasswordBox() {
+                        const box = el('div', { className: 'password-box' });
+                        const toggle = el('button', {
+                            className: 'link-button',
+                            text: state.passwordOpen ? 'Cancelar' : (data.protectedMode ? 'Cambiar contraseña del gerente' : 'Proteger con contraseña'),
+                        });
+                        toggle.addEventListener('click', () => { state.passwordOpen = !state.passwordOpen; renderStandards(); });
+                        box.appendChild(toggle);
+
+                        if (state.passwordOpen) {
+                            const currentInput = data.protectedMode ? el('input', { type: 'password', placeholder: 'Contraseña actual' }) : null;
+                            const newInput = el('input', { type: 'password', placeholder: 'Contraseña nueva (minimo 6 caracteres)' });
+                            const confirmInput = el('input', { type: 'password', placeholder: 'Confirmar contraseña nueva' });
+                            passwordStatusBox = el('span', { className: 'status' });
+
+                            if (currentInput) { box.appendChild(el('div', { className: 'password-row' }, [el('label', { text: 'Contraseña actual' }), currentInput])); }
+                            box.appendChild(el('div', { className: 'password-row' }, [el('label', { text: 'Contraseña nueva' }), newInput]));
+                            box.appendChild(el('div', { className: 'password-row' }, [el('label', { text: 'Confirmar contraseña' }), confirmInput]));
+
+                            const submit = el('button', { className: 'primary', text: 'Guardar contraseña' });
+                            submit.addEventListener('click', () => {
+                                if (newInput.value.length < 6) { onPasswordError('La contraseña nueva debe tener al menos 6 caracteres.'); return; }
+                                if (newInput.value !== confirmInput.value) { onPasswordError('Las contraseñas nuevas no coinciden.'); return; }
+                                vscode.postMessage({ command: 'changePassword', currentPassword: currentInput ? currentInput.value : undefined, newPassword: newInput.value });
+                            });
+                            box.appendChild(el('div', { className: 'password-row' }, [submit, passwordStatusBox]));
+                        }
+                        return box;
+                    }
+
                     //dibuja la pestaña de estandares dentro de su contenedor (root se redefine aqui para no tocar el resto de la funcion)
                     function renderStandards() {
                         const root = standardsBox;
                         root.textContent = '';
                         root.appendChild(el('h2', { text: 'Estándares del equipo' }));
                         if (!data.protectedMode) {
-                            root.appendChild(el('div', { className: 'banner', text: 'La extensión todavía no trae la contraseña del gerente, por eso la configuración aún no está protegida. Usa el comando "Establecer contraeña del Gerente".' }));
+                            root.appendChild(el('div', { className: 'banner', text: 'La configuración todavía no está protegida con contraseña: cualquiera con acceso al proyecto puede cambiarla.' }));
                         }
+                        root.appendChild(renderPasswordBox());
 
                         const search = el('input', { type: 'search', placeholder: 'Buscar una regla por nombre o descripción...', value: state.query });
                         search.setAttribute('aria-label', 'Buscar regla');
@@ -1085,6 +1118,19 @@ function getHtml(webview: vscode.Webview): string {
                     function onSaved() {
                         if (lastSent) { data.rules = lastSent.rules; data.priorities = lastSent.priorities; data.exclude = lastSent.exclude; }
                         setStatus('Guardado. Ya aplica para todo el equipo.', false);
+                    }
+
+                    function onPasswordChanged() {
+                        data.protectedMode = true;
+                        state.passwordOpen = false;
+                        renderStandards();
+                        setStatus('Contraseña del gerente actualizada.', false);
+                    }
+
+                    function onPasswordError(text) {
+                        if (!passwordStatusBox) { return; }
+                        passwordStatusBox.textContent = text;
+                        passwordStatusBox.className = 'status error';
                     }
 
                     // ------------------------------------------------------------------ pestañas: Estandares e Historial
