@@ -11,7 +11,7 @@ import { analyzeFileStatic } from './commands/codeReviewerCommand';
 // reglas que vienen de la IA, no se pueden re-chequear sin otra llamada, se dejan igual hasta el proximo commit
 const AI_RULES = new Set([
     'englishOnly', 'semanticNaming', 'singleResponsibility', 'codeComplexity',
-    'projectGuidelines', 'commentLenguage', 'aiReview', 'solidFrontendAi',
+    'projectGuidelines', 'commentLanguage', 'commentLenguage', 'aiReview', 'solidFrontendAi', //commentLenguage: asi se escribia antes, puede seguir en hallazgos guardados
 ]);
 // reglas que miran todo el proyecto, no se pueden recalcular viendo un solo archivo
 const PROJECT_WIDE_RULES = new Set(['interfaces', 'layers', 'duplicateCode', 'folderNaming', 'commitMessage']);

@@ -4,7 +4,11 @@
 
 import { callClaude } from '../../shared/claudeClient';
 import { CommentLine, extractComments } from '../../shared/commentExtraction';
-import { CommentLanguageConfig } from '../../config/configLoader';
+import { RuleToggle } from '../../config/configLoader';
+
+//este analizador ya no lo llama nadie (lo reemplazo la revision combinada de IA, que usa el modelo de aiReview),
+//por eso el modelo ya no forma parte de la configuracion de la regla y se pide aqui
+type CommentLanguageConfig = RuleToggle & { model: string };
 
 //cantidad maxima de comentarios en una sola llamada, para no armar prompts grandes
 const COMMENTS_PER_REQUEST = 40;

@@ -4,7 +4,11 @@
 
 import { callClaude } from '../../shared/claudeClient';
 import { collectChangesFunction } from '../../shared/functionExtraction';
-import { SingleResponsibilityConfig } from '../../config/configLoader';
+import { RuleToggle } from '../../config/configLoader';
+
+//este analizador ya no lo llama nadie (lo reemplazo la revision combinada de IA, que usa el modelo de aiReview),
+//por eso el modelo ya no forma parte de la configuracion de la regla y se pide aqui
+type SingleResponsibilityConfig = RuleToggle & { model: string };
 
 //las funciones muy cortas no pueden mezclar responsabilidades, se saltan para no gastar llamadas a la API
 const MIN_FUNCTION_LINES = 6;

@@ -4,6 +4,7 @@
 
 import * as vscode from 'vscode';
 import { Finding, Severity } from '../engine/shared/finding';
+import { canonicalRule, getRuleName } from '../engine/config/ruleCatalog';
 
 const FINDINGS_STATE_KEY = 'codeadvisor.lastFindings';
 
@@ -25,10 +26,12 @@ function getNonce(): string {
 //orden en que se muestran las prioridades en el panel, de la mas importante a la menos
 const SEVERITY_ORDER: Record<Severity, number> = { Alta: 0, Media: 1, Baja: 2 };
 
-//ordena los hallazgos por prioridad y luego por regla, archivo y linea, asi el panel puede agruparlos por regla
+//ordena los hallazgos por prioridad y luego por regla (por su nombre en español, que es el que ve el usuario), archivo y linea,
+//asi el panel puede agruparlos por regla
 function sortFindings(findings: Finding[]): Finding[] {
     return [...findings].sort((a, b) =>
         SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
+        getRuleName(a.rule).localeCompare(getRuleName(b.rule), 'es') ||
         a.rule.localeCompare(b.rule) ||
         a.file.localeCompare(b.file) ||
         (a.line ?? 0) - (b.line ?? 0)
@@ -83,7 +86,8 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
         this.folder = folder;
         this.lastBranch = saved.branch;
         this.lastCommit = saved.commit;
-        this.findings = saved.findings;
+        //lo guardado pudo ordenarse con el nombre en ingles de las reglas y traer nombres de regla antiguos (se agrupan con los de ahora)
+        this.findings = sortFindings(saved.findings.map(finding => ({ ...finding, rule: canonicalRule(finding.rule) })));
     }
 
     public getRestoredResult(): { folder: vscode.WorkspaceFolder; findings: Finding[] } | undefined {
@@ -130,7 +134,10 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
 
     //envia findings actuales
     private renderFindings(): void {
-        this.view?.webview.postMessage({ command: 'setFindings', findings: this.findings });
+        //el nombre de cada regla va aparte (en español) para que la pagina no muestre el identificador tecnico
+        const ruleNames: Record<string, string> = {};
+        for (const finding of this.findings) { ruleNames[finding.rule] = getRuleName(finding.rule); }
+        this.view?.webview.postMessage({ command: 'setFindings', findings: this.findings, ruleNames });
     }
 
     //cuando hace click en un hallazgo en el panel
@@ -182,8 +189,11 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
                         const SEVERITIES = ['Alta', 'Media', 'Baja'];
                         const state = vscode.getState() || { open: {} }; //recuerda que grupos dejo abiertos o cerrados el usuario
 
+                        let ruleNames = {}; //identificador de la regla -> nombre en español
+
                         window.addEventListener('message', event => {
                             if (event.data.command !== 'setFindings') { return; }
+                            ruleNames = event.data.ruleNames || {};
                             render(event.data.findings);
                         });
 
@@ -226,7 +236,7 @@ export class FindingsPanel implements vscode.WebviewViewProvider {
                             const key = severity + '|' + rule;
                             const isOpen = key in state.open ? state.open[key] : severity !== 'Baja';
                             return '<details class="rule ' + severity + '" data-key="' + escapeHtml(key) + '"' + (isOpen ? ' open' : '') + '>' +
-                                '<summary>' + escapeHtml(rule) + '<span class="count">' + items.length + '</span></summary>' +
+                                '<summary>' + escapeHtml(ruleNames[rule] || rule) + '<span class="count">' + items.length + '</span></summary>' +
                                 items.map(item => renderFinding(item.finding, item.index)).join('') +
                                 '</details>';
                         }

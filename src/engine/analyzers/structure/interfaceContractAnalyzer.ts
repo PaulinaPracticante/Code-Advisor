@@ -6,6 +6,9 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { InterfacesConfig } from '../../config/configLoader';
 import { Finding, pushFinding } from '../../shared/finding';
+import { runWithLimit } from '../../shared/parallel';
+
+const MAX_PARALLEL_FILE_READS = 16;
 
 // funcion que quita los comentarios
 function stripLineComment(rawLine: string): string {
@@ -576,16 +579,30 @@ export async function analyzeInterfaceContracts (
     // en c# la implementacion solo referencia el nombre de la interfaz, si la interfaz no
     // vive dentro del PR hay que buscarla en las carpetas donde normalmente se definen los
     // contratos (models/interfaces)
-    const contractFolderGlob = `**/{${config.contractFolders.join(',')}}/**/*.cs`;
-    const searchPattern = new vscode.RelativePattern(workspaceFolder, contractFolderGlob);
-    const candidateFiles = await vscode.workspace.findFiles(searchPattern, excludePattern);
+    // solo se recorren esas carpetas si el PR trae archivos .cs: son los unicos que se validan contra estos contratos,
+    // y en un PR de solo frontend se leian todos los .cs de las carpetas de contratos para nada
+    const prHasCSharpFiles = [...profileLines.keys()].some(fileLabel => fileLabel.endsWith('.cs'));
 
-    for (const uri of candidateFiles) {
-        const fileLabel = vscode.workspace.asRelativePath(uri);
-        if (profileLines.has(fileLabel)) { continue; } //y se proceso 
-        const bytes = await vscode.workspace.fs.readFile(uri);
-        const lines = Buffer.from(bytes).toString('utf8').split('\n');
-        collectCSharpContracts(lines, fileLabel, registry, config.includeAbstractClasses);
+    if (prHasCSharpFiles) {
+        const contractFolderGlob = `**/{${config.contractFolders.join(',')}}/**/*.cs`;
+        const searchPattern = new vscode.RelativePattern(workspaceFolder, contractFolderGlob);
+        const candidateFiles = await vscode.workspace.findFiles(searchPattern, excludePattern);
+
+        const pendingFiles = candidateFiles
+            .map(uri => ({ uri, fileLabel: vscode.workspace.asRelativePath(uri) }))
+            .filter(file => !profileLines.has(file.fileLabel)); //los del PR ya se procesaron
+
+        // se leen varios a la vez (con tope para no abrir cientos de archivos al mismo tiempo) pero se registran en el
+        // mismo orden de siempre, porque si dos archivos declaran el mismo contrato gana el ultimo
+        const contents: Uint8Array[] = new Array(pendingFiles.length);
+        await runWithLimit(pendingFiles, MAX_PARALLEL_FILE_READS, async (file, index) => {
+            contents[index] = await vscode.workspace.fs.readFile(file.uri);
+        });
+
+        pendingFiles.forEach((file, index) => {
+            const lines = Buffer.from(contents[index]).toString('utf8').split('\n');
+            collectCSharpContracts(lines, file.fileLabel, registry, config.includeAbstractClasses);
+        });
     }
 
 
@@ -595,7 +612,8 @@ export async function analyzeInterfaceContracts (
         const isJs = fileLabel.endsWith('.js');
         if (!isTs && !isJs) { continue; }
 
-        const importMap = importsByFile.get(fileLabel)!;
+        const importMap = importsByFile.get(fileLabel);
+        if (!importMap) { continue; }
         const referencedNames = isTs ? findReferencedContractNames(lines) : findReferencedJsContractNames(lines);
 
         for (const name of referencedNames) {

@@ -54,10 +54,6 @@
         "command": "codeadvisor.configureStandards",
         "title": "Configurar Estándares (Gerente)",
         "icon": "$(gear)"
-      },
-      {
-        "command": "codeadvisor.setManagerPassword",
-        "title": "Establecer contraseña del Gerente"
       }
     ],
     "menus": {

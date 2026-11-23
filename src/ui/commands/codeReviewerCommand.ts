@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { execFileSync } from 'child_process';
 import { loadConfig, buildExcludeMatchers, isExluded, CodeAdvisorConfig } from '../../engine/config/configLoader';
-import { getCommitSubjects, getPrChangedLineNumbers, isCommitInBase, resolveAnalysisBaseRef } from '../../engine/shared/diffUtils';
+import { fetchBaseBranch, getCommitSubjects, getPrChangedLineNumbers, getPrChangedLineNumbersByFile, isCommitInBase, resolveAnalysisBaseRef } from '../../engine/shared/diffUtils';
 import { recordAnalysis, recordPullRequestMerged } from '../../engine/history/historyRecorder';
 import { EXTENSION_TO_LANGUAGE_ID, getNamingCaseStyles } from '../../engine/config/namingConfig';
 import { analyzeNaming } from '../../engine/analyzers/style/namingAnalyzer';
@@ -101,7 +101,7 @@ export function analyzeFileStatic(
 			analyzeObjectUsage(lines, fileLabel, findings, changedLines, config.rules.objectUsage)
 	}
 
-	if (config.rules.requestHandlers.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
+	if (config.rules.requestHandlers.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
 			analyzeRequestHandlers(lines, fileLabel, findings, changedLines, config.rules.requestHandlers)
 	}
 
@@ -155,7 +155,24 @@ export function analyzeFileStatic(
 	}
 }
 
+// el analisis puede tardar (sobre todo la revision con IA), asi que se muestra una notificacion con el paso en el que va
 export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCollection: vscode.DiagnosticCollection, findingsPanel: FindingsPanel): Promise<void> {
+	await vscode.window.withProgress(
+		{ location: vscode.ProgressLocation.Notification, title: 'CodeAdvisor' },
+		progress => reviewWithProgress(folder, diagnosticCollection, findingsPanel, message => progress.report({ message }))
+	);
+}
+
+async function reviewWithProgress(folder: vscode.WorkspaceFolder, diagnosticCollection: vscode.DiagnosticCollection, findingsPanel: FindingsPanel, report: (message: string) => void): Promise<void> {
+		// tiempo de cada fase, se escribe en la consola al terminar para saber que parte tarda
+		const startedAt = Date.now();
+		const phaseTimes: string[] = [];
+		let phaseStartedAt = startedAt;
+		const endPhase = (name: string) => {
+			const now = Date.now();
+			phaseTimes.push(`${name} ${now - phaseStartedAt} ms`);
+			phaseStartedAt = now;
+		};
 
 
 		if (!folder) { //Si no hay una carpeta abierta, se muestra un mensaje de error
@@ -169,8 +186,12 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		let accumulated  = findingsPanel.getAccumulated(folder, branch);
 		let lastAnalyzedCommit = findingsPanel.getLastAnalyzedCommit(folder, branch);
 
+		// la rama base se descarga una sola vez por analisis (antes se descargaba dos veces); el resto de los pasos usa esa copia
+		report('Descargando la rama base...');
+		await fetchBaseBranch(folder.uri.fsPath, baseBranch);
+
 		// si el ultimo commit analizado ya esta en la rama base, el PR se mergeo: los hallazgos viejos ya no aplican y se empieza de cero
-		if (lastAnalyzedCommit && isCommitInBase(folder.uri.fsPath, baseBranch, lastAnalyzedCommit)) {
+		if (lastAnalyzedCommit && isCommitInBase(folder.uri.fsPath, baseBranch, lastAnalyzedCommit, false)) {
 			recordPullRequestMerged(folder.uri.fsPath, folder.name, branch, lastAnalyzedCommit); // el historial cierra el ciclo de esta rama
 			accumulated = [];
 			lastAnalyzedCommit = undefined;
@@ -240,11 +261,23 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		// ---- IDENTACION Y NOMBRES DE CLASES, FUNCIONES, METODOS, VARIABLES Y CONSTANTES ------
 		// ---- PARAMETROS ----------------------------------------------------------------------
 
+		endPhase('git y configuracion');
+		report('Revisando las reglas de los archivos...');
+
+		// un solo "git diff" para todos los archivos en vez de uno por archivo; si falla, o un archivo no aparece en el
+		// resultado (binarios, archivos vacios), el diff de ese archivo se pide por separado
+		let prChangedLines = new Map<string, Set<number>>();
+		try {
+			prChangedLines = getPrChangedLineNumbersByFile(folder.uri.fsPath, baseRef, baseBranchRef);
+		} catch (error) {
+			console.warn('CodeAdvisor: no se pudo leer el diff completo, se pedira archivo por archivo', error);
+		}
+
 		for (const uri of codeFiles) {
 			const fileLabel = vscode.workspace.asRelativePath(uri); // Ruta relativa del archivo, para identificarlo en el reporte
 			const bytes = await vscode.workspace.fs.readFile(uri); // Se lee el contenido del archivo
 			const lines = Buffer.from(bytes).toString('utf8').split('\n'); // Se divide el texto del documento en lineas
-			const rawChangedLines = getPrChangedLineNumbers(folder.uri.fsPath, baseRef, baseBranchRef, fileLabel);
+			const rawChangedLines = prChangedLines.get(fileLabel) ?? getPrChangedLineNumbers(folder.uri.fsPath, baseRef, baseBranchRef, fileLabel);
 			const flagged = flaggedLinesByFile.get(fileLabel);
 			const changedLines = flagged
 				? new Set([...rawChangedLines].filter(line => !flagged.has(line)))
@@ -313,8 +346,20 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		// runCombinedAiReview mezcla varias reglas (englishOnly, semanticNaming, singleResponsibility,
 		// codeComplexity, commentLanguage) con distinta prioridad cada una; se etiquetan dentro del
 		// propio analizador (ver CHECK_TO_RULE en combinedAiAnalyzer.ts), no se puede envolver aqui con una sola prioridad.
-		await runCombinedAiReview(aiFunctionTasks, aiCommentTasks, findings, config.rules.aiReview, guidelines);
-		await runSolidFrontendReview(solidFrontendTasks, findings, config.rules.solidFrontendAi);
+		// La IA es lo que mas tarda y no depende de lo que sigue, asi que se lanza ya y se revisa la estructura del proyecto
+		// mientras responde. Las dos revisiones de IA corren a la vez, cada una con sus hallazgos aparte, y se acomodan
+		// al final en este mismo lugar de la lista, para que el orden de los hallazgos sea el de siempre.
+		endPhase('reglas por archivo');
+		report('Revisando con IA y la estructura del proyecto...');
+		const aiStartedAt = Date.now();
+		const aiInsertAt = findings.length;
+		const combinedAiFindings: Finding[] = [];
+		const solidAiFindings: Finding[] = [];
+		const aiReview = Promise.all([
+			runCombinedAiReview(aiFunctionTasks, aiCommentTasks, combinedAiFindings, config.rules.aiReview, guidelines),
+			runSolidFrontendReview(solidFrontendTasks, solidAiFindings, config.rules.solidFrontendAi),
+		]).then(() => Date.now() - aiStartedAt);
+		aiReview.catch(() => undefined); // si algo falla antes de esperarla, que no quede como error sin atender
 
 		// --------------------------------------------------------------------------------------
 		// ---- CONTRATOS: INTERFACES Y CLASES ABSTRACTAS ---------------------------------------
@@ -323,7 +368,7 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		const folderPaths = await collectFolderPaths(folder.uri, excludeMatchers);
 
 		if (config.rules.folderNaming.enabled && shouldRunAnalyzer(projectMeta, 'frontend')) {
-				analyzeFolderStructure(folderPaths, folder.name, findings);
+				analyzeFolderStructure(folderPaths, folder.name, findings, config.rules.folderNaming);
 		}
 
 		if (config.rules.interfaces.enabled && shouldRunAnalyzer(projectMeta, 'backend')) {
@@ -371,6 +416,14 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 			analyzeCommitMessages(getCommitSubjects(folder.uri.fsPath, baseBranch), findings, config.rules.commitMessage);
 		}
 
+		// ahora si se espera a la IA (casi siempre ya termino) y sus hallazgos entran en el lugar que les toca
+		endPhase('reglas del proyecto');
+		report('Esperando la respuesta de la IA...');
+		const aiTotalMs = await aiReview;
+		endPhase('espera de la IA');
+		findings.splice(aiInsertAt, 0, ...combinedAiFindings, ...solidAiFindings);
+		phaseTimes.push(`(la IA tardo ${aiTotalMs} ms en total, mientras corrian las reglas del proyecto)`);
+
 		// ----------------------------------------------------------------------------------------
 		// ---- CARPETAS --------------------------------------------------------------------------
 		async function collectFolderPaths(uri: vscode.Uri, excludedNames: Minimatch[]): Promise<string[]> {
@@ -394,24 +447,9 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 		// --------------------------------------------------------------------------------------
 		// ---- REPORTE ---------------------------------------------------------------------------
 
-		// Se junta todo en un archivo de texto en la raiz del workspace y se abre para revisarlo
-		function groupByPriority(findings: Finding[]): string {
-			const order: Array<'Alta' | 'Media' | 'Baja'> = ['Alta', 'Media', 'Baja'];
-			const groups: Record<string, Finding[]> = { 'Alta': [], 'Media': [], 'Baja': [] };
 
-			for (const f of findings) {
-				groups[f.severity].push(f);
-			}
 
-			const formatFinding = (f: Finding) =>
-				`${f.file}${f.line !== undefined ? ':' + f.line : ''} - ${f.message}`;
-
-			return order
-				.filter(p => groups[p].length > 0)
-				.map(p => `=== Prioridad ${p.toUpperCase()} (${groups[p].length}) ===\n${groups[p].map(formatFinding).join('\n')}`)
-				.join('\n\n');
-		}
-
+		report('Guardando los resultados...');
 		const allFindings = mergeFindings(accumulated, findings);
 
 		publishDiagnostics(diagnosticCollection, folder, allFindings);
@@ -423,12 +461,11 @@ export async function runCodeReview(folder: vscode.WorkspaceFolder, diagnosticCo
 			recordAnalysis(folder.uri.fsPath, folder.name, branch, commit, allFindings);
 		}
 
-		const reportContent = allFindings.length > 0 ? groupByPriority(allFindings) : 'No se encontraron hallazgos.';
-		const reportUri = vscode.Uri.joinPath(folder.uri, 'code-advisor-report.txt');
-		await vscode.workspace.fs.writeFile(reportUri, Buffer.from(reportContent, 'utf8'));
+		
+	
 
-		const reportDocument = await vscode.workspace.openTextDocument(reportUri);
-		await vscode.window.showTextDocument(reportDocument);
+		endPhase('reporte');
+		console.log(`CodeAdvisor: analisis terminado en ${Date.now() - startedAt} ms -> ${phaseTimes.join(', ')}`);
 }
 
 

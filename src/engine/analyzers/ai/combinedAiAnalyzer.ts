@@ -4,6 +4,7 @@
 
 import { callClaude } from "../../shared/claudeClient";
 import { Finding, pushFinding } from "../../shared/finding";
+import { runWithLimit } from "../../shared/parallel";
 
 const MIN_FUNCTION_LINES = 5;
 
@@ -263,9 +264,48 @@ function applyCommentFindings(
     for (const finding of commentFindings) {
         const task = tasksById.get(finding.id);
         if (!task) { continue; }
-        pushFinding(findings, 'commentLenguage', task.fileLabel,
+        pushFinding(findings, 'commentLanguage', task.fileLabel,
             `El comentario "${task.text}" no esta en español, usa español (${finding.message})`,
             { line: task.line, suggestion: finding.suggestion });
+    }
+}
+
+// La IA tarda casi lo mismo por cada token que escribe, asi que un PR grande en una sola llamada tarda mucho (y puede
+// toparse con el limite de tokens de respuesta y cortar el JSON). Se reparte en llamadas mas chicas que corren a la vez.
+// Con 8 funciones o menos sigue siendo una sola llamada, igual que antes.
+const FUNCTIONS_PER_CALL = 8;
+const COMMENTS_PER_CALL = 40;
+const MAX_PARALLEL_CALLS = 4;
+
+interface AiBatch {
+    functions: AiFunctionTask[];
+    comments: AiCommentTask[];
+}
+
+function splitIntoBatches(functionTasks: AiFunctionTask[], commentTasks: AiCommentTask[]): AiBatch[] {
+    const batchCount = Math.max(
+        Math.ceil(functionTasks.length / FUNCTIONS_PER_CALL),
+        Math.ceil(commentTasks.length / COMMENTS_PER_CALL)
+    );
+
+    return Array.from({ length: batchCount }, (_unused, i) => ({
+        functions: functionTasks.slice(i * FUNCTIONS_PER_CALL, (i + 1) * FUNCTIONS_PER_CALL),
+        comments: commentTasks.slice(i * COMMENTS_PER_CALL, (i + 1) * COMMENTS_PER_CALL),
+    }));
+}
+
+async function reviewBatch(batch: AiBatch, findings: Finding[], config: AiReviewConfig, guidelines: string | null): Promise<void> {
+    const functionTaskById = new Map(batch.functions.map(task => [task.id, task]));
+    const commentTaskById = new Map(batch.comments.map(task => [task.id, task]));
+    const prompt = buildCombinedPrompt(batch.functions, batch.comments, guidelines !== null);
+
+    try {
+        const responseText = await callClaude(prompt, { model: config.model, maxTokens: config.maxTokens, system: guidelines ?? undefined, });
+        const parsed = parseCombinedResponse(responseText);
+        applyFunctionFindings(parsed.functions, functionTaskById, findings);
+        applyCommentFindings(parsed.comments, commentTaskById, findings);
+    } catch (error) {
+        pushFinding(findings, 'aiReview', '(sistema)', 'No se pudo ejecutar el analisis de IA combinado (' + (error as Error).message + ')');
     }
 }
 
@@ -278,17 +318,14 @@ export async function runCombinedAiReview(
 ): Promise<void> {
     if (functionTasks.length === 0 && commentTask.length === 0) { return; }
 
-    const functionTaskById = new Map(functionTasks.map(task => [task.id, task]));
-    const commentTaskById = new Map(commentTask.map(task => [task.id, task]));
-    const prompt = buildCombinedPrompt(functionTasks, commentTask, guidelines !== null);
+    const batches = splitIntoBatches(functionTasks, commentTask);
+    // cada llamada guarda sus hallazgos aparte y se juntan en orden, asi el resultado no depende de cual termino primero
+    const findingsByBatch: Finding[][] = batches.map(() => []);
 
-    try {
-        const responseText = await callClaude(prompt, { model: config.model, maxTokens: config.maxTokens, system: guidelines ?? undefined, });
-        const parsed = parseCombinedResponse(responseText);
-        applyFunctionFindings(parsed.functions, functionTaskById, findings);
-        applyCommentFindings(parsed.comments, commentTaskById, findings);
-    } catch (error) {
-        pushFinding(findings, 'aiReview', '(sistema)', 'No se pudo ejecutar el analisis de IA combinado (' + (error as Error).message + ')');
+    await runWithLimit(batches, MAX_PARALLEL_CALLS, (batch, index) => reviewBatch(batch, findingsByBatch[index], config, guidelines));
+
+    for (const batchFindings of findingsByBatch) {
+        findings.push(...batchFindings);
     }
 }
 

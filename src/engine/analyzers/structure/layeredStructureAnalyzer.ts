@@ -33,7 +33,8 @@ export function analyzeLayeredStructure(fileLines: Map<string, string[]>, folder
 
     const databasePattern = new RegExp(`\\b(?:${config.databaseUsagePatterns.join('|')})\\b`);
     //la capa de repositorios solo es obligatorio si el proyecto usa base de datos 
-    const usesDatabase = [...fileLines.values()].some(lines => //recorre todas las lineas de todos los archivos 
+    //sin patrones no hay forma de detectarlo (un patron vacio coincidiria con todo)
+    const usesDatabase = config.databaseUsagePatterns.length > 0 && [...fileLines.values()].some(lines => //recorre todas las lineas de todos los archivos
         lines.some(line => databasePattern.test(line)) //usa el regex para ver s en algun lado se usa una base de datos 
     );
     //arma la lista basica de capas a exigir y si usesDatabase es true se añade tambien REPOSITORT_LAYERS
