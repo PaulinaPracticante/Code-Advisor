@@ -2,6 +2,7 @@
 // ---- CLIENTE DE LA API DEL HISTORIAL: MANDA LOS REGISTROS (CON COLA SIN CONEXION) Y LOS CONSULTA ----
 // ----------------------------------------------------------------------------------------------------
 
+import * as vscode from 'vscode';
 import { HISTORY_API_TOKEN, HISTORY_API_URL } from './historyConfig';
 import type { AnalysisRecord, PullRequestClosure } from './historyTypes';
 
@@ -41,6 +42,8 @@ export class HistoryClient {
     private readonly timeoutMs: number;
     private flushing = false;
     private counter = 0;
+    private readonly sentEmitter = new vscode.EventEmitter<void>();
+    public readonly onDidSend = this.sentEmitter.event;
     public readonly extensionVersion: string;
 
     constructor(options: HistoryClientOptions) {
@@ -86,18 +89,21 @@ export class HistoryClient {
     public async flush(): Promise<void> {
         if (!this.isEnabled() || this.flushing) { return; }
         this.flushing = true;
+        let sentAny = false;
         try {
             for (;;) {
                 const next = this.readQueue()[0];
                 if (!next) { break; }
                 const outcome = await this.send(next);
                 if (outcome === 'retry') { break; }
+                if (outcome === 'sent') { sentAny = true; }
                 await this.writeQueue(this.readQueue().filter(item => item.id !== next.id));
             }
         } catch (error) {
             console.warn('CodeAdvisor: fallo el envio del historial', error);
         } finally {
             this.flushing = false;
+            if (sentAny) { this.sentEmitter.fire(); }
         }
     }
 

@@ -1,71 +1,29 @@
-# codeadvisor README
+# CodeAdvisor
 
-This is the README for your extension "codeadvisor". After writing up a brief description, we recommend including the following sections.
+Extensión de VS Code que revisa los commits de un pull request contra los estándares de código del equipo (reglas propias y, opcionalmente, IA) y muestra los hallazgos en un panel lateral.
 
-## Features
+## Requisitos
 
-Describe specific features of your extension including screenshots of your extension in action. Image paths are relative to this README file.
+* Tener la extensión de Git de VS Code habilitada (`vscode.git`).
+* Trabajar dentro de un repositorio git con una rama base (por defecto `main`).
 
-For example if there is an image subfolder under your extension project workspace:
+## Comandos
 
-\!\[feature X\]\(images/feature-x.png\)
+* **Revisar Código** (`codeadvisor.codeReviewer`): analiza los commits de la rama actual contra la base y llena el panel de hallazgos.
+* **Verificar Repositorio de Git** (`codeadvisor.gitVerification`): confirma que el workspace abierto tiene un repositorio git detectado por VS Code.
+* **Configurar Estándares (Gerente)** (`codeadvisor.configureStandards`): panel para activar/desactivar reglas, ajustar su prioridad y sus parámetros. Si el equipo usa el backend (ver abajo), el panel puede protegerse con una contraseña de gerente.
 
-> Tip: Many popular extensions utilize animations. This is an excellent way to show off your extension! We recommend short, focused animations that are easy to follow.
+## Backend (opcional, `server/`)
 
-## Requirements
+Una API (Node + MySQL) que guarda el historial de hallazgos por repositorio, los estándares vigentes del equipo y la contraseña del gerente, para que apliquen igual en todas las máquinas. Se configura la URL en `src/engine/history/historyConfig.ts` (`HISTORY_API_URL`). Sin esta API configurada, la extensión funciona igual pero sin historial compartido, sin estándares compartidos y sin protección por contraseña en el panel.
 
-If you have any requirements or dependencies, add a section describing those and how to install and configure them.
+Para levantarlo: ver `server/README` (o `server/package.json` para los scripts `db:init`, `dev`, `build`, `start`).
 
-## Extension Settings
+## Desarrollo
 
-Include if your extension adds any VS Code settings through the `contributes.configuration` extension point.
+```
+npm install
+npm run compile   # o npm run watch
+```
 
-For example:
-
-This extension contributes the following settings:
-
-* `myExtension.enable`: Enable/disable this extension.
-* `myExtension.thing`: Set to `blah` to do something.
-
-## Known Issues
-
-Calling out known issues can help limit users opening duplicate issues against your extension.
-
-## Release Notes
-
-Users appreciate release notes as you update your extension.
-
-### 1.0.0
-
-Initial release of ...
-
-### 1.0.1
-
-Fixed issue #.
-
-### 1.1.0
-
-Added features X, Y, and Z.
-
----
-
-## Following extension guidelines
-
-Ensure that you've read through the extensions guidelines and follow the best practices for creating your extension.
-
-* [Extension Guidelines](https://code.visualstudio.com/api/references/extension-guidelines)
-
-## Working with Markdown
-
-You can author your README using Visual Studio Code. Here are some useful editor keyboard shortcuts:
-
-* Split the editor (`Cmd+\` on macOS or `Ctrl+\` on Windows and Linux).
-* Toggle preview (`Shift+Cmd+V` on macOS or `Shift+Ctrl+V` on Windows and Linux).
-* Press `Ctrl+Space` (Windows, Linux, macOS) to see a list of Markdown snippets.
-
-## For more information
-
-* [Visual Studio Code's Markdown Support](http://code.visualstudio.com/docs/languages/markdown)
-* [Markdown Syntax Reference](https://help.github.com/articles/markdown-basics/)
-
-**Enjoy!**
+Se abre con F5 (Extension Development Host) para probar cambios localmente.

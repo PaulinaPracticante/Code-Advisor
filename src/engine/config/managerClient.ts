@@ -25,6 +25,8 @@ async function request(method: 'GET' | 'POST', path: string, body?: unknown): Pr
         let data: unknown;
         try { data = await response.json(); } catch { data = undefined; }
         return { ok: response.ok, status: response.status, data };
+    } catch (error) {
+        throw new Error('No se pudo conectar con el backend (' + HISTORY_API_URL + '): ' + (error instanceof Error ? error.message : String(error)));
     } finally {
         clearTimeout(timer);
     }

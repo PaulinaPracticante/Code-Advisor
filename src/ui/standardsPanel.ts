@@ -22,8 +22,15 @@ function getNonce(): string {
 }
 
 //revisa que la contraseña capturada sea la que esta guardada en el backend; si el panel aun no esta protegido, pasa derecho
-async function checkManagerAccess(): Promise<{ ok: true } | { error: string }> {
-    if (!(await isManagerProtected())) { return { ok: true }; }
+//si el backend no responde se niega el acceso (nunca se abre el panel "por si acaso") y se explica el motivo
+async function checkManagerAccess(): Promise<{ ok: true; protectedMode: boolean } | { error: string }> {
+    let protectedMode: boolean;
+    try {
+        protectedMode = await isManagerProtected();
+    } catch (error) {
+        return { error: 'No se pudo verificar el acceso: ' + (error instanceof Error ? error.message : String(error)) };
+    }
+    if (!protectedMode) { return { ok: true, protectedMode: false }; }
 
     const password = await vscode.window.showInputBox({
         prompt: 'Contraseña de gerente para configurar los estandares',
@@ -32,10 +39,12 @@ async function checkManagerAccess(): Promise<{ ok: true } | { error: string }> {
     });
     if (password === undefined) { return { error: '' }; }
 
-    if (!(await verifyManagerPassword(password))) {
-        return { error: 'Contraseña incorrecta.' };
+    try {
+        if (!(await verifyManagerPassword(password))) { return { error: 'Contraseña incorrecta.' }; }
+    } catch (error) {
+        return { error: 'No se pudo verificar la contraseña: ' + (error instanceof Error ? error.message : String(error)) };
     }
-    return { ok: true };
+    return { ok: true, protectedMode: true };
 }
 
 //lo llama el webview cuando el gerente llena el formulario "Cambiar contraseña"; si ya habia una pide la actual
@@ -149,7 +158,15 @@ async function openStandardsPanel(): Promise<void> {
         retainContextWhenHidden: true, //el formulario conserva lo capturado aunque el gerente cambie de pestaña
     });
     currentPanel = panel;
-    panel.onDidDispose(() => { currentPanel = undefined; });
+
+    const sentSubscription = getHistory()?.onDidSend(() => {
+        void panel.webview.postMessage({ command: 'historyChanged' });
+    });
+
+    panel.onDidDispose(() => { 
+        currentPanel = undefined;
+        sentSubscription?.dispose(); 
+    });
     panel.webview.html = getHtml(panel.webview);
 
     panel.webview.onDidReceiveMessage(async message => {
@@ -157,7 +174,7 @@ async function openStandardsPanel(): Promise<void> {
         if (message.command === 'ready') {
             void panel.webview.postMessage({
                 command: 'load',
-                protectedMode: await isManagerProtected(),
+                protectedMode: access.protectedMode,
                 historyEnabled: getHistory()?.isEnabled() ?? false,
                 exclude: config.exclude,
                 rules: config.rules,
@@ -367,6 +384,7 @@ function getHtml(webview: vscode.Webview): string {
                     window.addEventListener('message', event => {
                         const message = event.data;
                         if (message.command === 'load') { data = message; resetState(); render(); }
+                        if (message.command === 'historyChanged') { silentRefresh(); }
                         if (message.command === 'saved') { onSaved(); }
                         if (message.command === 'error') { setStatus(message.message, true); }
                         if (message.command === 'historyResponse') { onHistoryResponse(message); }
@@ -1162,6 +1180,7 @@ function getHtml(webview: vscode.Webview): string {
                             button.classList.toggle('active', button.dataset.tab === tab);
                         });
                         if (tab === 'history' && data.historyEnabled && !historyState.loaded && !historyState.loading) { loadHistory(); }
+                        if (tab === 'history' && data.historyEnabled) { silentRefresh(); startAutoRefresh(); } else { stopAutoRefresh(); }
                     }
 
                     // ------------------------------------------------------------------ historial
@@ -1170,6 +1189,9 @@ function getHtml(webview: vscode.Webview): string {
                     //lo que se ve en la pestaña Historial: filtros, resumen, PR cargados y cuales estan abiertos
                     const historyState = { loaded: false, loading: false, repos: [], repoId: '', state: 'all', days: 30, search: '', summary: null, cycles: [], total: 0, version: 0, expanded: {}, commits: {}, selected: {}, findings: {}, timer: null };
                     const pendingRequests = {};
+                    const AUTO_REFRESH_MS = 45000;
+                    const autoRefresh = { timer: null, running: false, lastOk: 0, lastHash: '' };
+                    let updatedLabel = null;
                     let nextRequestId = 0;
                     let repoSelect = null;
                     let historyStatus = null;
@@ -1233,7 +1255,8 @@ function getHtml(webview: vscode.Webview): string {
                         });
                         refreshButton.addEventListener('click', () => { loadHistory(); });
 
-                        historyBox.appendChild(el('div', { className: 'toolbar' }, [repoSelect, stateSelect, daysSelect, searchBox, refreshButton]));
+                        updatedLabel = el('span', { className: 'muted' });
+                        historyBox.appendChild(el('div', { className: 'toolbar' }, [repoSelect, stateSelect, daysSelect, searchBox, refreshButton, updatedLabel]));
                         historyStatus = el('div');
                         summaryBox = el('div');
                         cyclesBox = el('div');
@@ -1268,6 +1291,9 @@ function getHtml(webview: vscode.Webview): string {
                             await Promise.all([reloadSummary(), reloadCycles(true)]);
                             historyState.loaded = true;
                             historyStatus.textContent = '';
+                            autoRefresh.lastOk = Date.now();
+                            autoRefresh.lastHash = '';
+                            renderUpdatedLabel();
                         } catch (error) {
                             showHistoryError(error);
                         } finally {
@@ -1296,6 +1322,77 @@ function getHtml(webview: vscode.Webview): string {
                         historyState.total = page.total;
                         renderCycles();
                     }
+
+                    async function silentRefresh() {
+                        if (!data.historyEnabled || !historyState.loaded || historyState.loading || autoRefresh.running) { return; }
+                        if (activeTab !== 'history' || document.hidden) { return; }       // solo si el gerente lo está viendo
+                        autoRefresh.running = true;
+                        try {
+                            const summaryParams = { days: historyState.days };
+                            const cyclesParams = { state: historyState.state, search: historyState.search, limit: Math.max(PAGE_SIZE, historyState.cycles.length), offset: 0 };
+                            if (historyState.repoId !== '') {
+                                summaryParams.repoId = Number(historyState.repoId);
+                                cyclesParams.repoId = Number(historyState.repoId);
+                            }
+                            const version = historyState.version;
+                            const [summary, page] = await Promise.all([askHistory('summary', summaryParams), askHistory('cycles', cyclesParams)]);
+                            if (version !== historyState.version) { return; }              // cambiaron los filtros mientras llegaba
+
+                            const hash = JSON.stringify([summary, page]);
+                            if (hash !== autoRefresh.lastHash) {                            // solo se redibuja si algo cambió
+                                autoRefresh.lastHash = hash;
+                                historyState.summary = summary;
+                                historyState.cycles = page.items;
+                                historyState.total = page.total;
+                                renderSummary();
+                                renderCycles();
+                                await refreshOpenCycles(page.items);
+                            }
+                            autoRefresh.lastOk = Date.now();
+                            historyStatus.textContent = '';
+                            renderUpdatedLabel();
+                        } catch (error) {
+                            // un fallo del refresco automático no borra la lista; solo se avisa discretamente
+                            if (updatedLabel) { updatedLabel.textContent = 'No se pudo actualizar (se reintentará)'; }
+                        } finally {
+                            autoRefresh.running = false;
+                        }
+                    }
+
+                    //los PR abiertos en pantalla pueden tener commits nuevos: se vuelven a pedir sin mostrar "Cargando..."
+                    async function refreshOpenCycles(cycles) {
+                        const open = cycles.filter(cycle => historyState.expanded[cycleKey(cycle)]);
+                        await Promise.all(open.map(async cycle => {
+                            const key = cycleKey(cycle);
+                            try {
+                                const commits = await askHistory('commits', { repoId: cycle.repoId, branch: cycle.branch, pullRequestId: cycle.pullRequestId });
+                                historyState.commits[key] = { items: commits };
+                                const stillThere = commits.some(commit => commit.analysisId === historyState.selected[key]);
+                                if (!stillThere && commits.length > 0) { historyState.selected[key] = commits[commits.length - 1].analysisId; }
+                                if (historyState.selected[key]) { await loadFindings(historyState.selected[key]); }   // loadFindings ya omite lo cacheado
+                            } catch (error) { /* se queda lo que había */ }
+                        }));
+                        renderCycles();
+                    }
+
+                    function renderUpdatedLabel() {
+                        if (!updatedLabel) { return; }
+                        const seconds = Math.round((Date.now() - autoRefresh.lastOk) / 1000);
+                        updatedLabel.textContent = autoRefresh.lastOk === 0 ? '' : 'Actualizado ' + (seconds < 5 ? 'ahora' : 'hace ' + seconds + ' s');
+                    }
+
+                    function startAutoRefresh() {
+                        stopAutoRefresh();
+                        autoRefresh.timer = setInterval(silentRefresh, AUTO_REFRESH_MS);
+                        autoRefresh.tick = setInterval(renderUpdatedLabel, 5000);
+                    }
+                    function stopAutoRefresh() {
+                        clearInterval(autoRefresh.timer);
+                        clearInterval(autoRefresh.tick);
+                    }
+
+                    //al volver a ver el panel (cambio de pestaña de VS Code) se refresca de inmediato
+                    document.addEventListener('visibilitychange', () => { if (!document.hidden) { silentRefresh(); } });
 
                     // ---- resumen (indicadores, tendencia y reglas mas incumplidas)
 
